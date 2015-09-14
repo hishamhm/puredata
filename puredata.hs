@@ -333,14 +333,23 @@ patch = PdPatch 10 (fromList [
             PdMessageBox [PdCommand PdToOutlet [PdTAtom (PdSymbol "bang")]] [PdControlInlet True "list"] [],
             PdObject     [PdSymbol "float"] [PdControlInlet True "float", PdControlInlet False "float"] [PdControlOutlet "float"],
             PdObject     [PdSymbol "+", PdFloat 1] [PdControlInlet True "float", PdControlInlet False "float"] [PdControlOutlet "float"],
+            PdObject     [PdSymbol "print"] [PdControlInlet True "list"] [],
+
+            PdMessageBox [PdCommand PdToOutlet [PdTAtom (PdSymbol "bang")]] [PdControlInlet True "list"] [],
+            PdMessageBox [PdCommand PdToOutlet [PdTAtom (PdSymbol "float"), PdTAtom (PdFloat 100)]] [PdControlInlet True "list"] [],
             PdObject     [PdSymbol "print"] [PdControlInlet True "list"] []
+
          ]) (fromList [
             PdConnection (0, 0) (1, 0), -- bang -> float
             PdConnection (1, 0) (2, 0), -- float -> + 1
             PdConnection (2, 0) (1, 1), -- + 1 -> float
-            PdConnection (1, 0) (3, 0)  -- float -> print
+            PdConnection (1, 0) (3, 0), -- float -> print
+            
+            PdConnection (4, 0) (2, 0), -- bang -> + 1
+            PdConnection (5, 0) (2, 1), -- 100 -> + 1
+            PdConnection (2, 0) (6, 0)  -- + 1 -> print
          ])
 
 main :: IO ()
-main = print (run 30 patch [(PdEvent 1 0), (PdEvent 3 0), (PdEvent 5 0)])
+main = print (run 30 patch [(PdEvent 1 0), (PdEvent 3 0), (PdEvent 5 0), (PdEvent 6 4), (PdEvent 7 4), (PdEvent 8 4), (PdEvent 10 5),  (PdEvent 12 0), (PdEvent 13 0), (PdEvent 15 0) ])
 --
