@@ -1,6 +1,6 @@
 
-import Data.Sequence (Seq, fromList, index, update, foldlWithIndex)
-import qualified Data.Sequence (length)
+import Data.Sequence (Seq, fromList, index, update)
+import qualified Data.Sequence(length, foldlWithIndex)
 import Data.Foldable (toList)
 import qualified Data.Foldable (foldl)
 import Debug.Trace
@@ -8,7 +8,7 @@ import Debug.Trace
 data PdAtom = PdFloat Float
             | PdSymbol String
             | PdGPointer Int
-   deriving Show
+   deriving (Show, Eq)
 
 type PdSample = Float
 
@@ -26,7 +26,7 @@ data PdToken = PdTDollar Int
              | PdTAtom PdAtom
    deriving Show
 
-data PdReceiver = PdOutlet
+data PdReceiver = PdToOutlet
                 | PdReceiver String
                 | PdRDollar Int
                 | PdReceiverErr
@@ -70,6 +70,10 @@ instance Show PdEnv where
    show (PdEnv step states output) =
       "Step: " ++ show step ++ " - Nodes: " ++ show (toList states) ++ " - Output: " ++ concatMap (\l -> l ++ "\n") output ++ "\n"
 
+-- Produce a sequence of n empty inlets
+emptyInlets :: Int -> Seq [PdAtom]
+emptyInlets n = fromList (replicate n [])
+
 ffor a f = fmap f a
 
 initialState :: PdPatch -> Seq PdNodeState
@@ -79,16 +83,11 @@ initialState (PdPatch _ nodes conns) =
       zeroState :: Seq PdNodeState
       zeroState =
          ffor nodes (\ node ->
-            let
-               -- Fill every inlet with an empty list
-               emptyInlets :: [PdInlet] -> Seq [PdAtom]
-               emptyInlets inl = fromList (replicate (length inl) [])
-            in
-               case node of
-                  PdAtomBox    atoms inl _ -> PdNodeState (emptyInlets inl) atoms
-                  PdObject     _     inl _ -> PdNodeState (emptyInlets inl) []
-                  PdMessageBox _     inl _ -> PdNodeState (emptyInlets inl) []
-                  PdGObject    _     inl _ -> PdNodeState (emptyInlets inl) []
+            case node of
+               PdAtomBox    atoms inl _ -> PdNodeState (emptyInlets (length inl)) atoms
+               PdObject     _     inl _ -> PdNodeState (emptyInlets (length inl)) []
+               PdMessageBox _     inl _ -> PdNodeState (emptyInlets (length inl)) []
+               PdGObject    _     inl _ -> PdNodeState (emptyInlets (length inl)) []
          )
       doConn :: Seq PdNodeState -> PdConnection -> Seq PdNodeState
       doConn prev (PdConnection (src, outl) (dst, inl)) =
@@ -125,14 +124,17 @@ dollarExpansion cmd@(PdCommand recv tokens) cmdState =
                PdTAtom atom -> atom
          )
 
-updateEnv :: Int -> Int -> [PdAtom] -> PdEnv -> PdEnv
-updateEnv dst inl atoms env@(PdEnv step states output) =
+updateNodeState :: Int -> PdNodeState -> PdEnv -> PdEnv
+updateNodeState dst state env@(PdEnv step states output) =
+   PdEnv step (update dst state states) output
+
+updateInlet :: Int -> Int -> [PdAtom] -> PdEnv -> PdEnv
+updateInlet dst inl atoms env@(PdEnv step states output) =
    let
       oldState@(PdNodeState inlets internal) = index states dst
       newState = PdNodeState (update inl atoms inlets) internal
-      newStates = update dst newState states
    in
-      PdEnv step newStates output
+      updateNodeState dst newState env
 
 printOut :: [PdAtom] -> PdEnv -> PdEnv
 printOut atoms env@(PdEnv step states output) =
@@ -141,41 +143,75 @@ printOut atoms env@(PdEnv step states output) =
 run :: Int -> PdPatch -> [PdEvent] -> [PdEnv]
 run steps patch@(PdPatch _ nodes conns) events = 
    let
-   
-      sendMessage :: [PdAtom] -> Int -> Int -> PdEnv -> PdEnv
-      sendMessage atoms idx inl env@(PdEnv step states output) =
-         let
-            node = index nodes idx
-            state@(PdNodeState inlets _) = index states idx
-            env' = (updateEnv idx 0 atoms env)
+
+      sendMessage :: [PdAtom] -> PdNode -> Int -> Int -> PdEnv -> PdEnv
+      
+      -- message box:
+      
+      sendMessage atoms (PdMessageBox cmds _ _) nodeIdx 0 env =
+         foldl (processCommand nodeIdx) (updateInlet nodeIdx 0 atoms env) cmds
+      
+      -- "print" object:
+      
+      sendMessage (PdSymbol "float" : fs) (PdObject (PdSymbol "print" : xs) _ _) _ 0 env =
+         printOut (xs ++ fs) env
+      
+      sendMessage atoms (PdObject (PdSymbol "print" : xs) _ _) _ 0 env =
+         printOut (xs ++ atoms) env
+      
+      -- "float" object:
+      
+      sendMessage [PdSymbol "bang"] (PdObject (PdSymbol "float" : xs) _ _) nodeIdx 0 env@(PdEnv _ states _) =
+         let 
+            (PdNodeState inlets internal) = index states nodeIdx
+            newInternal =
+               Data.Foldable.foldl keepLastValue internal inlets
+               where 
+                  keepLastValue :: [PdAtom] -> [PdAtom] -> [PdAtom]
+                  keepLastValue value inlvalue = if inlvalue /= [] then inlvalue else value
+            env' = updateNodeState nodeIdx (PdNodeState (emptyInlets (Data.Sequence.length inlets)) newInternal) env
          in
-            if (trace ("sendMessage atoms " ++ show atoms ++ " to " ++ show idx) (inl == 0))
-            then
-               let 
-                  env'' = 
-                     case node of
-                        PdObject (PdSymbol "print" : xs) _ _ -> printOut (xs ++ atoms) env'
-                        PdMessageBox cmds _ _ -> (foldl (processCommand idx) env' cmds)
-                        _ -> env' --FIXME
-               in
-                  updateEnv idx 0 [] env''
-            else updateEnv idx inl atoms env
-   
+            forEachOutlet nodeIdx (sendMessage (PdSymbol "float" : newInternal)) env'
+      
+      -- "+" object:
+      
+      sendMessage [PdSymbol "float", (PdFloat f)] (PdObject [PdSymbol "+", n] _ _) nodeIdx 0 env@(PdEnv _ states _) =
+         let
+            (PdNodeState inlets internal) = index states nodeIdx
+            inlet1 = index inlets 1
+            (PdFloat incVal) = if inlet1 == [] then n else head inlet1
+            newInternal = [PdFloat (f + incVal)]
+            env' = updateNodeState nodeIdx (PdNodeState inlets newInternal) env
+         in
+            forEachOutlet nodeIdx (sendMessage (PdSymbol "float" : newInternal)) env'
+      
+      sendMessage [PdSymbol "bang"] (PdObject [PdSymbol "+", n] _ _) nodeIdx 0 env@(PdEnv _ states _) =
+         let
+            (PdNodeState _ internal) = index states nodeIdx
+         in
+            forEachOutlet nodeIdx (sendMessage (PdSymbol "float" : internal)) env
+      
+      -- cold inlets:
+      
+      sendMessage atoms _ nodeIdx inl env =
+         updateInlet nodeIdx inl atoms env
+
+      forEachOutlet :: Int -> (PdNode -> Int -> Int -> PdEnv -> PdEnv) -> PdEnv -> PdEnv
       forEachOutlet idx op env =
          Data.Foldable.foldl handle env conns
          where
             handle :: PdEnv -> PdConnection -> PdEnv
             handle env (PdConnection (src, _) (dst, inl)) =
                if src == idx
-               then (trace ("Will send event to "++show dst++" "++show inl) op dst inl env)
+               then (trace ("Will send event to "++show dst++" "++show inl) op (index nodes dst) dst inl env)
                else env
 
-      forEachReceiver :: String -> (Int -> Int -> PdEnv -> PdEnv) -> PdEnv -> PdEnv
+      forEachReceiver :: String -> (PdNode -> Int -> Int -> PdEnv -> PdEnv) -> PdEnv -> PdEnv
       forEachReceiver name op env =
-         foldlWithIndex handle env nodes
+         Data.Sequence.foldlWithIndex handle env nodes
          where
             handle :: PdEnv -> Int -> PdNode -> PdEnv
-            handle env dst (PdObject (PdSymbol "r" : (PdSymbol rname : _)) _ _) =
+            handle env dst node@(PdObject (PdSymbol "r" : (PdSymbol rname : _)) _ _) =
                if name == rname
                then forEachOutlet dst op env
                else env
@@ -189,7 +225,7 @@ run steps patch@(PdPatch _ nodes conns) events =
             (recv, atoms) = dollarExpansion cmd (trace ("data: "++show inletData) inletData)
          in
             case (trace ("Routing " ++ show atoms ++ " to " ++ show recv ++ " " ++ show idx) recv) of
-               PdOutlet ->
+               PdToOutlet ->
                   forEachOutlet idx (sendMessage atoms) env
                PdReceiver r ->
                   forEachReceiver r (sendMessage atoms) env
@@ -203,7 +239,7 @@ run steps patch@(PdPatch _ nodes conns) events =
             node = index nodes idx
          in
             case (trace ("New EVENT: " ++ show time ++ "/" ++ show idx) node) of
-               PdMessageBox cmds _ _ -> updateEnv idx 0 [] (foldl (processCommand idx) env cmds)
+               PdMessageBox cmds _ _ -> updateInlet idx 0 [] (foldl (processCommand idx) env cmds)
                _ -> env
    
       runStep :: PdEnv -> [PdEvent] -> PdEnv
@@ -253,9 +289,9 @@ patch = PdPatch 10 (fromList [
 
 -- messages.pd
 patch = PdPatch 10 (fromList [
-            PdMessageBox [PdCommand PdOutlet [PdTAtom (PdSymbol "list"), PdTAtom (PdFloat 1), PdTAtom (PdFloat 2)], PdCommand PdOutlet [PdTAtom (PdSymbol "list"), PdTAtom (PdFloat 10), PdTAtom (PdFloat 20)]] [PdControlInlet True "list"] [], 
-            PdMessageBox [PdCommand PdOutlet [PdTAtom (PdSymbol "list"), PdTAtom (PdSymbol "foo"), PdTAtom (PdFloat 5), PdTAtom (PdFloat 6)]] [PdControlInlet True "list"] [], 
-            PdMessageBox [PdCommand PdOutlet [PdTDollar 1, PdTDollar 1], PdCommand (PdRDollar 1) [PdTDollar 2], PdCommand (PdReceiver "bar") [PdTDollar 2, PdTDollar 1]] [PdControlInlet True "list"] [], 
+            PdMessageBox [PdCommand PdToOutlet [PdTAtom (PdSymbol "list"), PdTAtom (PdFloat 1), PdTAtom (PdFloat 2)], PdCommand PdToOutlet [PdTAtom (PdSymbol "list"), PdTAtom (PdFloat 10), PdTAtom (PdFloat 20)]] [PdControlInlet True "list"] [], 
+            PdMessageBox [PdCommand PdToOutlet [PdTAtom (PdSymbol "list"), PdTAtom (PdSymbol "foo"), PdTAtom (PdFloat 5), PdTAtom (PdFloat 6)]] [PdControlInlet True "list"] [], 
+            PdMessageBox [PdCommand PdToOutlet [PdTDollar 1, PdTDollar 1], PdCommand (PdRDollar 1) [PdTDollar 2], PdCommand (PdReceiver "bar") [PdTDollar 2, PdTDollar 1]] [PdControlInlet True "list"] [], 
             PdObject     [PdSymbol "print"] [PdControlInlet True "symbol"] [],
             PdObject     [PdSymbol "print"] [PdControlInlet True "symbol"] [],
             PdObject     [PdSymbol "r", PdSymbol "foo"] [] [PdControlOutlet "bang"],
@@ -273,3 +309,22 @@ patch = PdPatch 10 (fromList [
 
 main :: IO ()
 main = print (run 30 patch [(PdEvent 1 0), (PdEvent 3 1)])
+
+{-
+-- inc.pd
+patch :: PdPatch
+patch = PdPatch 10 (fromList [
+            PdMessageBox [PdCommand PdToOutlet [PdTAtom (PdSymbol "bang")]] [PdControlInlet True "list"] [],
+            PdObject     [PdSymbol "float"] [PdControlInlet True "float"] [PdControlOutlet "float"],
+            PdObject     [PdSymbol "+", PdFloat 1] [PdControlInlet True "float", PdControlInlet False "float"] [PdControlOutlet "float"],
+            PdObject     [PdSymbol "print"] [PdControlInlet True "list"] []
+         ]) (fromList [
+            PdConnection (0, 0) (1, 0), -- bang -> float
+            PdConnection (1, 0) (2, 0), -- float -> + 1
+            PdConnection (2, 0) (1, 1), -- + 1 -> float
+            PdConnection (2, 0) (3, 0)  -- float -> print
+         ])
+
+main :: IO ()
+main = print (run 30 patch [(PdEvent 1 0), (PdEvent 3 0), (PdEvent 5 0)])
+-}
