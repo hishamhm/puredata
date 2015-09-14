@@ -68,7 +68,7 @@ data PdEnv = PdEnv Int (Seq PdNodeState) [String]
 
 instance Show PdEnv where
    show (PdEnv step states output) =
-      "Step: " ++ show step ++ " - Nodes: " ++ show (toList states) ++ " - Output: " ++ concatMap (\l -> l ++ "\n") output ++ "\n"
+      "Step: " ++ show step ++ " - Nodes: " ++ show (toList states) ++ " - Output:\n" ++ concatMap (\l -> l ++ "\n") output ++ "\n"
 
 -- Produce a sequence of n empty inlets
 emptyInlets :: Int -> Seq [PdAtom]
@@ -181,22 +181,29 @@ run steps patch@(PdPatch _ nodes conns) events =
       
       -- "+" object:
       
-      sendMessage [PdSymbol "float", (PdFloat f)] (PdObject [PdSymbol "+", n] _ _) nodeIdx 0 env@(PdEnv _ states _) =
+      sendMessage [PdSymbol "float", fl] (PdObject [PdSymbol "+", n] _ _) nodeIdx 0 env@(PdEnv _ states _) =
          let
             (PdNodeState inlets internal) = trace "+ got a float"
                                                (index states nodeIdx)
+            (PdFloat val0) = fl
             inlet1 = index inlets 1
-            (PdFloat incVal) = if inlet1 == [] then n else head inlet1
-            newInternal = [PdFloat (f + incVal)]
-            env' = updateNodeState nodeIdx (PdNodeState inlets newInternal) env
+            (PdFloat val1) = if inlet1 == [] then n else head inlet1
+            newInternal = [PdFloat (val0 + val1)]
+            env' = updateNodeState nodeIdx (PdNodeState (update 0 [fl] inlets) newInternal) env
          in
             forEachOutlet nodeIdx (sendMessage (PdSymbol "float" : newInternal)) env'
       
       sendMessage [PdSymbol "bang"] (PdObject [PdSymbol "+", n] _ _) nodeIdx 0 env@(PdEnv _ states _) =
          let
-            (PdNodeState _ internal) = index states nodeIdx
+            (PdNodeState inlets internal) = index states nodeIdx
+            inlet0 = index inlets 0
+            (PdFloat val0) = if inlet0 == [] then (PdFloat 0) else head inlet0
+            inlet1 = index inlets 1
+            (PdFloat val1) = if inlet1 == [] then n else head inlet1
+            newInternal = [PdFloat (val0 + val1)]
+            env' = updateNodeState nodeIdx (PdNodeState inlets newInternal) env
          in
-            forEachOutlet nodeIdx (sendMessage (PdSymbol "float" : internal)) env
+            forEachOutlet nodeIdx (sendMessage (PdSymbol "float" : newInternal)) env
       
       -- cold inlets:
       
@@ -332,24 +339,33 @@ patch :: PdPatch
 patch = PdPatch 10 (fromList [
             PdMessageBox [PdCommand PdToOutlet [PdTAtom (PdSymbol "bang")]] [PdControlInlet True "list"] [],
             PdObject     [PdSymbol "float"] [PdControlInlet True "float", PdControlInlet False "float"] [PdControlOutlet "float"],
-            PdObject     [PdSymbol "+", PdFloat 1] [PdControlInlet True "float", PdControlInlet False "float"] [PdControlOutlet "float"],
             PdObject     [PdSymbol "print"] [PdControlInlet True "list"] [],
+            PdObject     [PdSymbol "+", PdFloat 1] [PdControlInlet True "float", PdControlInlet False "float"] [PdControlOutlet "float"],
 
+            PdObject     [PdSymbol "print"] [PdControlInlet True "list"] [],
             PdMessageBox [PdCommand PdToOutlet [PdTAtom (PdSymbol "bang")]] [PdControlInlet True "list"] [],
-            PdMessageBox [PdCommand PdToOutlet [PdTAtom (PdSymbol "float"), PdTAtom (PdFloat 100)]] [PdControlInlet True "list"] [],
-            PdObject     [PdSymbol "print"] [PdControlInlet True "list"] []
+            PdMessageBox [PdCommand PdToOutlet [PdTAtom (PdSymbol "float"), PdTAtom (PdFloat 100)]] [PdControlInlet True "list"] []
 
          ]) (fromList [
-            PdConnection (0, 0) (1, 0), -- bang -> float
-            PdConnection (1, 0) (2, 0), -- float -> + 1
-            PdConnection (2, 0) (1, 1), -- + 1 -> float
-            PdConnection (1, 0) (3, 0), -- float -> print
-            
-            PdConnection (4, 0) (2, 0), -- bang -> + 1
-            PdConnection (5, 0) (2, 1), -- 100 -> + 1
-            PdConnection (2, 0) (6, 0)  -- + 1 -> print
+            PdConnection (0, 0) (1, 0),
+            PdConnection (1, 0) (2, 0),
+            PdConnection (1, 0) (3, 0),
+            PdConnection (3, 0) (1, 1),
+            PdConnection (3, 0) (4, 0),
+            PdConnection (5, 0) (3, 0),
+            PdConnection (6, 0) (3, 1)
          ])
 
 main :: IO ()
-main = print (run 30 patch [(PdEvent 1 0), (PdEvent 3 0), (PdEvent 5 0), (PdEvent 6 4), (PdEvent 7 4), (PdEvent 8 4), (PdEvent 10 5),  (PdEvent 12 0), (PdEvent 13 0), (PdEvent 15 0) ])
+main = print (run 30 patch [
+                        (PdEvent 1 0),
+                        (PdEvent 3 0),
+                        (PdEvent 5 0),
+                        (PdEvent 6 5),
+                        (PdEvent 7 5),
+                        (PdEvent 8 6),
+                        (PdEvent 10 5),
+                        (PdEvent 12 0),
+                        (PdEvent 13 0),
+                        (PdEvent 15 0) ])
 --
