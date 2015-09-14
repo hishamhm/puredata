@@ -162,22 +162,29 @@ run steps patch@(PdPatch _ nodes conns) events =
       -- "float" object:
       
       sendMessage [PdSymbol "bang"] (PdObject (PdSymbol "float" : xs) _ _) nodeIdx 0 env@(PdEnv _ states _) =
-         let 
+         let
             (PdNodeState inlets internal) = index states nodeIdx
-            newInternal =
-               Data.Foldable.foldl keepLastValue internal inlets
-               where 
-                  keepLastValue :: [PdAtom] -> [PdAtom] -> [PdAtom]
-                  keepLastValue value inlvalue = if inlvalue /= [] then inlvalue else value
+            oldInternal = if internal /= [] then internal else [PdFloat 0]
+            inlet1 = index inlets 1
+            newInternal = if inlet1 == [] then oldInternal else inlet1
             env' = updateNodeState nodeIdx (PdNodeState (emptyInlets (Data.Sequence.length inlets)) newInternal) env
          in
-            forEachOutlet nodeIdx (sendMessage (PdSymbol "float" : newInternal)) env'
+            trace ("outputting float " ++ show newInternal)
+               (forEachOutlet nodeIdx (sendMessage (PdSymbol "float" : newInternal)) env')
+
+      sendMessage (PdSymbol "float" : fl) (PdObject [PdSymbol "float"] inl _) nodeIdx 0 env@(PdEnv _ states _) =
+         let
+            env' = updateNodeState nodeIdx (PdNodeState (emptyInlets (length inl)) fl) env
+         in
+            trace ("forwarding float " ++ show fl)
+               (forEachOutlet nodeIdx (sendMessage (PdSymbol "float" : fl)) env')
       
       -- "+" object:
       
       sendMessage [PdSymbol "float", (PdFloat f)] (PdObject [PdSymbol "+", n] _ _) nodeIdx 0 env@(PdEnv _ states _) =
          let
-            (PdNodeState inlets internal) = index states nodeIdx
+            (PdNodeState inlets internal) = trace "+ got a float"
+                                               (index states nodeIdx)
             inlet1 = index inlets 1
             (PdFloat incVal) = if inlet1 == [] then n else head inlet1
             newInternal = [PdFloat (f + incVal)]
@@ -193,8 +200,15 @@ run steps patch@(PdPatch _ nodes conns) events =
       
       -- cold inlets:
       
-      sendMessage atoms _ nodeIdx inl env =
-         updateInlet nodeIdx inl atoms env
+      sendMessage (PdSymbol "float" : fs) node nodeIdx inl env =
+         trace ("catch all float: " ++ show fs ++ " to " ++ show node ++ " " ++ show inl)
+            (updateInlet nodeIdx inl fs env)
+
+      sendMessage atoms node nodeIdx inl env =
+         trace ("catch all: " ++ show atoms ++ " to " ++ show node ++ " " ++ show inl)
+            (updateInlet nodeIdx inl atoms env)
+      
+      --
 
       forEachOutlet :: Int -> (PdNode -> Int -> Int -> PdEnv -> PdEnv) -> PdEnv -> PdEnv
       forEachOutlet idx op env =
@@ -224,7 +238,7 @@ run steps patch@(PdPatch _ nodes conns) events =
             inletData = index inlets 0
             (recv, atoms) = dollarExpansion cmd (trace ("data: "++show inletData) inletData)
          in
-            case (trace ("Routing " ++ show atoms ++ " to " ++ show recv ++ " " ++ show idx) recv) of
+            case (trace ("At " ++ show idx ++ " routing " ++ show atoms ++ " to " ++ show recv ++ " " ++ show idx) recv) of
                PdToOutlet ->
                   forEachOutlet idx (sendMessage atoms) env
                PdReceiver r ->
@@ -238,7 +252,7 @@ run steps patch@(PdPatch _ nodes conns) events =
          let
             node = index nodes idx
          in
-            case (trace ("New EVENT: " ++ show time ++ "/" ++ show idx) node) of
+            case (trace ("New EVENT: " ++ show time ++ "/" ++ show idx ++ " for env " ++ show env) node) of
                PdMessageBox cmds _ _ -> updateInlet idx 0 [] (foldl (processCommand idx) env cmds)
                _ -> env
    
@@ -260,6 +274,7 @@ run steps patch@(PdPatch _ nodes conns) events =
    in loop (PdEnv 0 (initialState patch) []) events []
 
 {-
+-- osc.pd
 patch = PdPatch 10 (fromList [
             PdAtomBox    [PdFloat 0] [PdControlInlet True "bang"] [PdControlOutlet "float"],
             PdObject     [PdSymbol "osc~", PdFloat 1000] [PdControlInlet True "float", PdControlInlet True "float"] [PdSignalOutlet],
@@ -288,6 +303,7 @@ patch = PdPatch 10 (fromList [
 -}
 
 -- messages.pd
+{-
 patch = PdPatch 10 (fromList [
             PdMessageBox [PdCommand PdToOutlet [PdTAtom (PdSymbol "list"), PdTAtom (PdFloat 1), PdTAtom (PdFloat 2)], PdCommand PdToOutlet [PdTAtom (PdSymbol "list"), PdTAtom (PdFloat 10), PdTAtom (PdFloat 20)]] [PdControlInlet True "list"] [], 
             PdMessageBox [PdCommand PdToOutlet [PdTAtom (PdSymbol "list"), PdTAtom (PdSymbol "foo"), PdTAtom (PdFloat 5), PdTAtom (PdFloat 6)]] [PdControlInlet True "list"] [], 
@@ -309,22 +325,22 @@ patch = PdPatch 10 (fromList [
 
 main :: IO ()
 main = print (run 30 patch [(PdEvent 1 0), (PdEvent 3 1)])
+-}
 
-{-
 -- inc.pd
 patch :: PdPatch
 patch = PdPatch 10 (fromList [
             PdMessageBox [PdCommand PdToOutlet [PdTAtom (PdSymbol "bang")]] [PdControlInlet True "list"] [],
-            PdObject     [PdSymbol "float"] [PdControlInlet True "float"] [PdControlOutlet "float"],
+            PdObject     [PdSymbol "float"] [PdControlInlet True "float", PdControlInlet False "float"] [PdControlOutlet "float"],
             PdObject     [PdSymbol "+", PdFloat 1] [PdControlInlet True "float", PdControlInlet False "float"] [PdControlOutlet "float"],
             PdObject     [PdSymbol "print"] [PdControlInlet True "list"] []
          ]) (fromList [
             PdConnection (0, 0) (1, 0), -- bang -> float
             PdConnection (1, 0) (2, 0), -- float -> + 1
             PdConnection (2, 0) (1, 1), -- + 1 -> float
-            PdConnection (2, 0) (3, 0)  -- float -> print
+            PdConnection (1, 0) (3, 0)  -- float -> print
          ])
 
 main :: IO ()
 main = print (run 30 patch [(PdEvent 1 0), (PdEvent 3 0), (PdEvent 5 0)])
--}
+--
