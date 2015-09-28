@@ -99,10 +99,10 @@ initialState (PdPatch _ nodes conns) =
             case srcNode of
                PdAtomBox atoms _ _ ->
                   let
-                     updDstInlets = update inl (dstInlet ++ atoms) dstInlets
-                     updDstState = PdNodeState updDstInlets dstAtoms
+                     newInlets = update inl (dstInlet ++ atoms) dstInlets
+                     newState = PdNodeState newInlets dstAtoms
                   in
-                     update dst updDstState prev
+                     update dst newState prev
                _ ->
                   prev
 
@@ -238,6 +238,11 @@ run steps patch@(PdPatch _ nodes conns) events =
                else env
             handle env _ _ = env
 
+      normalizeMessage :: [PdAtom] -> [PdAtom]
+      normalizeMessage atoms@(PdFloat f : xs) =
+         (PdSymbol "float" : atoms)
+      normalizeMessage atoms = atoms
+
       processCommand :: Int -> PdEnv -> PdCommand -> PdEnv
       processCommand idx env@(PdEnv step states output) cmd =
          let
@@ -247,9 +252,9 @@ run steps patch@(PdPatch _ nodes conns) events =
          in
             case (trace ("At " ++ show idx ++ " routing " ++ show atoms ++ " to " ++ show recv ++ " " ++ show idx) recv) of
                PdToOutlet ->
-                  forEachOutlet idx (sendMessage atoms) env
+                  forEachOutlet idx (sendMessage (normalizeMessage atoms)) env
                PdReceiver r ->
-                  forEachReceiver r (sendMessage atoms) env
+                  forEachReceiver r (sendMessage (normalizeMessage atoms)) env
                PdReceiverErr ->
                   printOut [PdSymbol "$1: symbol needed as message destination"] env
 
@@ -262,13 +267,21 @@ run steps patch@(PdPatch _ nodes conns) events =
             case (trace ("New EVENT: " ++ show time ++ "/" ++ show idx ++ " for env " ++ show env) node) of
                PdMessageBox cmds _ _ -> updateInlet idx 0 [] (foldl (processCommand idx) env cmds)
                _ -> env
+
+      processInternalStates :: PdEnv -> PdEnv
+      processInternalStates env =
+         Data.Sequence.foldlWithIndex handle env nodes
+         where 
+            handle :: PdEnv -> Int -> PdNode -> PdEnv
+            handle env idx node = env --TODO handle various internal states of objects
    
       runStep :: PdEnv -> [PdEvent] -> PdEnv
       runStep env events =
          let
             env'@(PdEnv step states output) = foldr processEvent env events
+            env''@(PdEnv step' states' output') = processInternalStates env'
          in
-            PdEnv (step + 1) states output --FIXME
+            PdEnv (step' + 1) states' output'
       
       loop :: PdEnv -> [PdEvent] -> [PdEnv] -> [PdEnv]
       loop env@(PdEnv step states output) events envs =
@@ -280,13 +293,12 @@ run steps patch@(PdPatch _ nodes conns) events =
 
    in loop (PdEnv 0 (initialState patch) []) events []
 
-{-
--- osc.pd
+-- osc0.pd
 patch = PdPatch 10 (fromList [
             PdAtomBox    [PdFloat 0] [PdControlInlet True "bang"] [PdControlOutlet "float"],
             PdObject     [PdSymbol "osc~", PdFloat 1000] [PdControlInlet True "float", PdControlInlet True "float"] [PdSignalOutlet],
-            PdAtomBox    [PdFloat 0.1, PdFloat 100] [PdControlInlet True "bang"] [PdControlOutlet "list"],
-            PdAtomBox    [PdFloat 0, PdFloat 100] [PdControlInlet True "bang"] [PdControlOutlet "list"],
+            PdMessageBox [PdCommand PdToOutlet [PdTAtom (PdFloat 0.1), PdTAtom (PdFloat 100)]] [PdControlInlet True "bang"] [PdControlOutlet "list"],
+            PdMessageBox [PdCommand PdToOutlet [PdTAtom (PdFloat 0), PdTAtom (PdFloat 100)]] [PdControlInlet True "bang"] [PdControlOutlet "list"],
             PdObject     [PdSymbol "line~", PdFloat 0] [PdControlInlet True "list", PdControlInlet False "float"] [PdSignalOutlet],
             PdObject     [PdSymbol "*~", PdFloat 0] [PdSignalInlet 0, PdSignalInlet 0] [PdSignalOutlet],
             PdObject     [PdSymbol "dac~", PdFloat 0] [PdSignalInlet 0] [],
@@ -294,23 +306,30 @@ patch = PdPatch 10 (fromList [
             PdObject     [PdSymbol "metro", PdFloat 500] [PdControlInlet True "bang"] [PdControlOutlet "bang"],
             PdObject     [PdSymbol "tabwrite~", PdSymbol "array99"] [PdControlInlet True "signal"] [],
             PdGObject    [PdSymbol "array99"] [] [],
-            PdMessageBox [PdCommand [], PdCommand [PdTAtom (PdSymbol "metroToggle"), PdTAtom (PdFloat 1.0)]] [] [],
-            PdMessageBox [PdCommand [], PdCommand [PdTAtom (PdSymbol "metroToggle"), PdTAtom (PdFloat 0.0)]] [] []
+            PdMessageBox [PdCommand (PdReceiver "metroToggle") [PdTAtom (PdFloat 1.0)]] [] [],
+            PdMessageBox [PdCommand (PdReceiver "metroToggle") [PdTAtom (PdFloat 0.0)]] [] []
          ]) (fromList [
             PdConnection (0, 0) (1, 0), -- 0 -> osc~
             PdConnection (1, 0) (5, 0), -- osc~ -> *~
             PdConnection (1, 0) (9, 0), -- osc~ -> tabwrite~
             PdConnection (7, 0) (8, 0), -- r -> metro
             PdConnection (8, 0) (9, 0), -- metro -> tabwrite~
-            PdConnection (2, 0) (4, 0), -- 0.1 -> line~
-            PdConnection (3, 0) (4, 0), -- 0 -> line~
+            PdConnection (2, 0) (4, 0), -- 0.1 100 -> line~
+            PdConnection (3, 0) (4, 0), -- 0 100 -> line~
             PdConnection (4, 0) (5, 1), -- line~ -> *~
             PdConnection (5, 0) (6, 0)  -- line~ -> dac~
          ])
--}
 
--- messages.pd
-{-
+main :: IO ()
+main = print (run 5000 patch [
+                        (PdEvent 100 12), -- metroToggle 1
+                        (PdEvent 200 3),  -- 0.1 100
+                        (PdEvent 4000 6), -- 0 100
+                        (PdEvent 4500 13) -- metroToggle 0
+             ])
+--}
+
+{-- messages.pd
 patch = PdPatch 10 (fromList [
             PdMessageBox [PdCommand PdToOutlet [PdTAtom (PdSymbol "list"), PdTAtom (PdFloat 1), PdTAtom (PdFloat 2)], PdCommand PdToOutlet [PdTAtom (PdSymbol "list"), PdTAtom (PdFloat 10), PdTAtom (PdFloat 20)]] [PdControlInlet True "list"] [], 
             PdMessageBox [PdCommand PdToOutlet [PdTAtom (PdSymbol "list"), PdTAtom (PdSymbol "foo"), PdTAtom (PdFloat 5), PdTAtom (PdFloat 6)]] [PdControlInlet True "list"] [], 
@@ -332,9 +351,9 @@ patch = PdPatch 10 (fromList [
 
 main :: IO ()
 main = print (run 30 patch [(PdEvent 1 0), (PdEvent 3 1)])
--}
+--}
 
--- inc.pd
+{-- inc.pd
 patch :: PdPatch
 patch = PdPatch 10 (fromList [
             PdMessageBox [PdCommand PdToOutlet [PdTAtom (PdSymbol "bang")]] [PdControlInlet True "list"] [],
@@ -368,4 +387,4 @@ main = print (run 30 patch [
                         (PdEvent 12 0),
                         (PdEvent 13 0),
                         (PdEvent 15 0) ])
---
+--}
