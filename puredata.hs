@@ -5,6 +5,7 @@ import qualified Data.Foldable (foldl)
 import Debug.Trace
 import Data.List (sort)
 import Text.Printf
+import Data.Fixed
 
 data PdAtom = PdFloat Double
             | PdSymbol String
@@ -184,16 +185,17 @@ zeroDspInlets env@(PdEnv step states output) dspSort =
 
 performDsp :: PdNode -> PdNodeState -> ([PdAtom], [PdAtom])
 
-osc :: Double -> Double -> Double
-osc freq idx = sin (2 * pi / (32000 / freq) * idx)
+osc :: Double -> Double -> Double -> Double
+osc position delta idx = (position + (delta * idx)) `mod'` (2 * pi)
 
 performDsp obj@(PdObject [PdSymbol "osc~", PdFloat freq] _ _) state@(PdNodeState inlets []) =
-   performDsp obj (PdNodeState inlets [PdFloat freq, PdFloat 0])
+   performDsp obj (PdNodeState inlets [PdFloat ((2 * pi) / (32000 / freq)), PdFloat 0])
 
-performDsp obj@(PdObject [PdSymbol "osc~", _] _ _) state@(PdNodeState inlets [PdFloat freq, PdFloat idx]) =
+performDsp obj@(PdObject [PdSymbol "osc~", _] _ _) state@(PdNodeState inlets [PdFloat delta, PdFloat position]) =
    let
-      output = map PdFloat $ map (osc freq) [idx .. (idx + 63)]
-      newInternal = [PdFloat freq, PdFloat (idx + 64)]
+      output = map (PdFloat . sin . osc position delta) [0..63]
+      nextPosition = osc position delta 64
+      newInternal = [PdFloat delta, PdFloat nextPosition]
    in
       (output, newInternal)
 
@@ -287,9 +289,9 @@ run steps patch@(PdPatch _ nodes conns dspSort) events =
 
       sendMessage [PdSymbol "float", PdFloat freq] (PdObject (PdSymbol "osc~" : _) _ _) nodeIdx 0 env@(PdEnv _ states _) =
          let
-            (PdNodeState inlets internal) = index states nodeIdx
+            (PdNodeState inlets [_, position]) = index states nodeIdx
          in
-            updateNodeState nodeIdx (PdNodeState inlets [PdFloat freq, PdFloat 0]) env
+            updateNodeState nodeIdx (PdNodeState inlets [PdFloat ((2 * pi) / (32000 / freq)), position]) env
 
       -- "line~" object:
       
@@ -453,8 +455,8 @@ f = 698.46
 
 main :: IO ()
 main = print (genOutput $ run 10000 patch [
-                        (PdEvent 100 11 Nothing), -- metroToggle 1
-                        (PdEvent 200 2 Nothing),  -- 0.1 1000
+                        (PdEvent 5 11 Nothing), -- metroToggle 1
+                        (PdEvent 10 2 Nothing),  -- 0.1 1000
                         (PdEvent 900 3 Nothing), -- 0 100
                         (PdEvent 1001 0 (Just $ PdFloat cs)),
                         (PdEvent 1002 2 Nothing),  -- 0.1 1000
@@ -463,23 +465,27 @@ main = print (genOutput $ run 10000 patch [
                         (PdEvent 2001 0 (Just $ PdFloat g)),
                         (PdEvent 2002 2 Nothing),  -- 0.1 1000
 
-                        (PdEvent 3400 3 Nothing), -- 0 100
-                        (PdEvent 3501 0 (Just $ PdFloat gsh)),
-                        (PdEvent 3502 2 Nothing),  -- 0.1 1000
-                        (PdEvent 3750 0 (Just $ PdFloat ash)),
+                        (PdEvent 3660 3 Nothing), -- 0 100
+                        (PdEvent 3749 2 Nothing),  -- 0.1 1000
+                        
+                        (PdEvent 3750 0 (Just $ PdFloat gsh)),
+                        (PdEvent 3875 0 (Just $ PdFloat ash)),
                         (PdEvent 4000 0 (Just $ PdFloat gsh)),
 
-                        (PdEvent 4250 0 (Just $ PdFloat f)),
+                        (PdEvent 4333 0 (Just $ PdFloat f)),
 
-                        (PdEvent 4500 0 (Just $ PdFloat cs)),
+                        (PdEvent 4666 0 (Just $ PdFloat cs)),
 
-                        (PdEvent 4750 0 (Just $ PdFloat g)),
+                        (PdEvent 5000 0 (Just $ PdFloat g)),
 
-                        (PdEvent 5250 0 (Just $ PdFloat gsh)),
-                        (PdEvent 5400 0 (Just $ PdFloat ash)),
-                        (PdEvent 5550 0 (Just $ PdFloat gsh)),
+                        (PdEvent 5650 3 Nothing), -- 0 100
+                        (PdEvent 5745 2 Nothing),  -- 0.1 1000
 
-                        (PdEvent 7500 3 Nothing), -- 0 100
+                        (PdEvent 5750 0 (Just $ PdFloat gsh)),
+                        (PdEvent 5875 0 (Just $ PdFloat ash)),
+                        (PdEvent 6000 0 (Just $ PdFloat gsh)),
+
+                        (PdEvent 7000 3 Nothing), -- 0 100
 
                         (PdEvent 4500 12 Nothing) -- metroToggle 0
              ])
