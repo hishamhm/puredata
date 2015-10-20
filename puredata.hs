@@ -1,9 +1,9 @@
-
 import Data.Sequence (Seq, fromList, index, update)
-import qualified Data.Sequence(length, foldlWithIndex)
+import qualified Data.Sequence (length, foldlWithIndex)
 import Data.Foldable (toList)
 import qualified Data.Foldable (foldl)
 import Debug.Trace
+import Data.List (sort)
 
 data PdAtom = PdFloat Float
             | PdSymbol String
@@ -47,6 +47,7 @@ data PdMessage = PdMessage [PdAtom]
 
                     -- (src-node-idx, outlet-idx), (dst-node-idx, inlet-idx)
 data PdConnection = PdConnection (Int, Int) (Int, Int)
+   deriving Show
 
                -- time, node-idx
 data PdEvent = PdEvent Int Int
@@ -54,7 +55,8 @@ data PdEvent = PdEvent Int Int
 
 type PdBufferSize = Int
 
-data PdPatch = PdPatch PdBufferSize (Seq PdNode) (Seq PdConnection)
+               -- buffer-size, nodes, connections, dsp-sort-order
+data PdPatch = PdPatch PdBufferSize (Seq PdNode) (Seq PdConnection) [Int]
 
                    -- inlet-data, internal-state
 data PdNodeState = PdNodeState (Seq [PdAtom]) [PdAtom]
@@ -68,7 +70,7 @@ data PdEnv = PdEnv Int (Seq PdNodeState) [String]
 
 instance Show PdEnv where
    show (PdEnv step states output) =
-      "Step: " ++ show step ++ " - Nodes: " ++ show (toList states) ++ " - Output:\n" ++ concatMap (\l -> l ++ "\n") output ++ "\n"
+      "Step: " ++ show step ++ " - Nodes: " ++ show (toList states) ++ " - Output: {\n" ++ concatMap (\l -> l ++ "\n") output ++ "}\n"
 
 -- Produce a sequence of n empty inlets
 emptyInlets :: Int -> Seq [PdAtom]
@@ -77,7 +79,7 @@ emptyInlets n = fromList (replicate n [])
 ffor a f = fmap f a
 
 initialState :: PdPatch -> Seq PdNodeState
-initialState (PdPatch _ nodes conns) =
+initialState (PdPatch _ nodes conns _) =
    Data.Foldable.foldl doConn zeroState conns
    where
       zeroState :: Seq PdNodeState
@@ -125,8 +127,8 @@ dollarExpansion cmd@(PdCommand recv tokens) cmdState =
          )
 
 updateNodeState :: Int -> PdNodeState -> PdEnv -> PdEnv
-updateNodeState dst state env@(PdEnv step states output) =
-   PdEnv step (update dst state states) output
+updateNodeState idx state env@(PdEnv step states output) =
+   PdEnv step (update idx state states) output
 
 updateInlet :: Int -> Int -> [PdAtom] -> PdEnv -> PdEnv
 updateInlet dst inl atoms env@(PdEnv step states output) =
@@ -136,12 +138,54 @@ updateInlet dst inl atoms env@(PdEnv step states output) =
    in
       updateNodeState dst newState env
 
+saturate :: Functor f => f PdAtom -> f PdAtom
+saturate =
+   fmap (\(PdFloat f) -> PdFloat (min 1.0 f))
+
+-- additive synthesis
+addToInlet :: Int -> Int -> [PdAtom] -> PdEnv -> PdEnv
+addToInlet dst inl atoms env@(PdEnv step states output) =
+   let
+      oldState@(PdNodeState inlets internal) = index states dst
+      oldAtoms = index inlets inl
+      newAtoms = saturate $ fmap (\(PdFloat a, PdFloat b) -> PdFloat (a + b)) (zip oldAtoms atoms)
+      newState = PdNodeState (update inl newAtoms inlets) internal
+   in
+      updateNodeState dst newState env
+
 printOut :: [PdAtom] -> PdEnv -> PdEnv
 printOut atoms env@(PdEnv step states output) =
    PdEnv step states (output ++ ["print: " ++ show atoms])
 
+zeroDspInlets :: PdEnv -> [Int] -> PdEnv
+zeroDspInlets env@(PdEnv step states output) dspSort =
+   let
+      states' =
+         fromList $ clearedStates 0 (toList states) (sort dspSort)
+            where
+               zeroState :: PdNodeState -> PdNodeState
+               zeroState (PdNodeState inlets internal) =
+                  PdNodeState (fromList $ replicate (Data.Sequence.length inlets) (replicate 64 (PdFloat 0.0))) internal
+
+               clearedStates :: Int -> [PdNodeState] -> [Int] -> [PdNodeState]
+               clearedStates i (st:sts) indices@(idx:idxs)
+                  | i == idx  = zeroState st : clearedStates (i+1) sts idxs
+                  | otherwise = st           : clearedStates (i+1) sts indices
+               clearedStates i states [] = states
+               clearedStates i []     _  = []
+   in
+      PdEnv step states' output
+
+performDsp :: PdNode -> PdNodeState -> ([PdAtom], [PdAtom])
+
+performDsp obj@(PdObject [PdSymbol "*~"] _ _) state@(PdNodeState inlets []) =
+   (toList $ replicate 65 $ PdFloat 0.0, [])
+
+performDsp obj state =
+   trace ("performDsp catch-all: " ++ show obj) (toList $ replicate 65 $ PdFloat 0.0, [])
+
 run :: Int -> PdPatch -> [PdEvent] -> [PdEnv]
-run steps patch@(PdPatch _ nodes conns) events = 
+run steps patch@(PdPatch _ nodes conns dspSort) events =
    let
 
       sendMessage :: [PdAtom] -> PdNode -> Int -> Int -> PdEnv -> PdEnv
@@ -222,20 +266,17 @@ run steps patch@(PdPatch _ nodes conns) events =
          Data.Foldable.foldl handle env conns
          where
             handle :: PdEnv -> PdConnection -> PdEnv
-            handle env (PdConnection (src, _) (dst, inl)) =
-               if src == idx
-               then (trace ("Will send event to "++show dst++" "++show inl) op (index nodes dst) dst inl env)
-               else env
+            handle env (PdConnection (src, _) (dst, inl))
+               | src == idx = (trace ("Will send event to "++show dst++" "++show inl) op (index nodes dst) dst inl env)
+               | otherwise  = env
 
       forEachReceiver :: String -> (PdNode -> Int -> Int -> PdEnv -> PdEnv) -> PdEnv -> PdEnv
       forEachReceiver name op env =
          Data.Sequence.foldlWithIndex handle env nodes
          where
             handle :: PdEnv -> Int -> PdNode -> PdEnv
-            handle env dst node@(PdObject (PdSymbol "r" : (PdSymbol rname : _)) _ _) =
-               if name == rname
-               then forEachOutlet dst op env
-               else env
+            handle env dst node@(PdObject (PdSymbol "r" : (PdSymbol rname : _)) _ _)
+               | name == rname = forEachOutlet dst op env
             handle env _ _ = env
 
       normalizeMessage :: [PdAtom] -> [PdAtom]
@@ -268,23 +309,34 @@ run steps patch@(PdPatch _ nodes conns) events =
                PdMessageBox cmds _ _ -> updateInlet idx 0 [] (foldl (processCommand idx) env cmds)
                _ -> env
 
-      processInternalStates :: PdEnv -> PdEnv
-      processInternalStates env =
-         Data.Sequence.foldlWithIndex handle env nodes
-         where 
-            handle :: PdEnv -> Int -> PdNode -> PdEnv
-            handle env idx node = env --TODO handle various internal states of objects
+      processDspTree :: PdEnv -> PdEnv
+      processDspTree env =
+         foldl handle (zeroDspInlets env dspSort) dspSort
+         where
+            handle :: PdEnv -> Int -> PdEnv
+            handle env'@(PdEnv step states _) idx =
+               let
+                  obj = index nodes idx
+                  state@(PdNodeState inlets internal) = index states idx
+                  (outDsp, newInternal) = performDsp obj state
+                  env'' = updateNodeState idx (PdNodeState inlets newInternal) env'
+               in
+                  Data.Foldable.foldl (propagate outDsp) env'' conns
+                  where
+                     propagate :: [PdAtom] -> PdEnv -> PdConnection -> PdEnv
+                     propagate outDsp env (PdConnection (src, outl) (dst, inl)) =
+                        addToInlet dst inl outDsp env
    
       runStep :: PdEnv -> [PdEvent] -> PdEnv
       runStep env events =
          let
             env'@(PdEnv step states output) = foldr processEvent env events
-            env''@(PdEnv step' states' output') = processInternalStates env'
+            env''@(PdEnv step' states' output') = processDspTree env'
          in
             PdEnv (step' + 1) states' output'
       
       loop :: PdEnv -> [PdEvent] -> [PdEnv] -> [PdEnv]
-      loop env@(PdEnv step states output) events envs =
+      loop env@(PdEnv step _ _) events envs =
          if step == steps
          then envs
          else
@@ -318,7 +370,7 @@ patch = PdPatch 10 (fromList [
             PdConnection (3, 0) (4, 0), -- 0 100 -> line~
             PdConnection (4, 0) (5, 1), -- line~ -> *~
             PdConnection (5, 0) (6, 0)  -- line~ -> dac~
-         ])
+         ]) [1, 4, 5, 9, 6]
 
 main :: IO ()
 main = print (run 5000 patch [
