@@ -202,7 +202,7 @@ performDsp obj@(PdObject [PdSymbol "line~"] _ _) state@(PdNodeState inlets []) =
 
 performDsp obj@(PdObject [PdSymbol "line~"] _ _) state@(PdNodeState inlets [PdFloat current, PdFloat target, PdFloat delta]) =
    let
-      limiter = if delta > 0 then trace "min" min else max
+      limiter = if delta > 0 then min else max
       output = map PdFloat $ tail $ take 65 $ iterate (\v -> limiter target (v + delta)) current
       newInternal = [last output, PdFloat target, PdFloat delta]
    in
@@ -288,7 +288,7 @@ run steps patch@(PdPatch _ nodes conns dspSort) events =
             [PdFloat current, PdFloat target, PdFloat delta] = if internal /= [] then internal else [PdFloat 0, PdFloat 0, PdFloat 0]
             newInternal = [PdFloat current, PdFloat amp, PdFloat ((amp - current) / (time * 32))]
          in
-            trace "GOT" updateNodeState nodeIdx (PdNodeState inlets newInternal) env
+            updateNodeState nodeIdx (PdNodeState inlets newInternal) env
       
       -- cold inlets:
       
