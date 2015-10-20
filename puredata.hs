@@ -407,8 +407,8 @@ run steps patch@(PdPatch _ nodes conns dspSort) events =
 -- osc0.pd
 patch = PdPatch 10 (fromList [
             PdAtomBox    [PdFloat 0] [PdControlInlet True "bang"] [PdControlOutlet "float"],
-            PdObject     [PdSymbol "osc~", PdFloat 880] [PdControlInlet True "float", PdControlInlet True "float"] [PdSignalOutlet],
-            PdMessageBox [PdCommand PdToOutlet [PdTAtom (PdFloat 0.1), PdTAtom (PdFloat 1000)]] [PdControlInlet True "bang"] [PdControlOutlet "list"],
+            PdObject     [PdSymbol "osc~", PdFloat gsh] [PdControlInlet True "float", PdControlInlet True "float"] [PdSignalOutlet],
+            PdMessageBox [PdCommand PdToOutlet [PdTAtom (PdFloat 0.25), PdTAtom (PdFloat 1000)]] [PdControlInlet True "bang"] [PdControlOutlet "list"],
             PdMessageBox [PdCommand PdToOutlet [PdTAtom (PdFloat 0), PdTAtom (PdFloat 100)]] [PdControlInlet True "bang"] [PdControlOutlet "list"],
             PdObject     [PdSymbol "line~"] [PdControlInlet True "list", PdControlInlet False "float"] [PdSignalOutlet],
             PdObject     [PdSymbol "*~"] [PdSignalInlet 0, PdSignalInlet 0] [PdSignalOutlet],
@@ -445,14 +445,42 @@ everyOther x = x
 genOutput x = concat $ everyOther $ toList $ fmap (\env@(PdEnv _ states _) -> getData $ index states 6) x
 --genOutput x = x
 
+cs = 554.37
+ash = 932.33
+g = 783.99
+gsh = 830.61
+f = 698.46
+
 main :: IO ()
-main = print (genOutput $ run 5000 patch [
+main = print (genOutput $ run 10000 patch [
                         (PdEvent 100 11 Nothing), -- metroToggle 1
                         (PdEvent 200 2 Nothing),  -- 0.1 1000
-                        (PdEvent 1000 0 (Just $ PdFloat 900)),
-                        (PdEvent 2000 0 (Just $ PdFloat 800)),
-                        (PdEvent 3000 0 (Just $ PdFloat 700)),
-                        (PdEvent 4000 3 Nothing), -- 0 100
+                        (PdEvent 900 3 Nothing), -- 0 100
+                        (PdEvent 1001 0 (Just $ PdFloat cs)),
+                        (PdEvent 1002 2 Nothing),  -- 0.1 1000
+
+                        (PdEvent 1900 3 Nothing), -- 0 100
+                        (PdEvent 2001 0 (Just $ PdFloat g)),
+                        (PdEvent 2002 2 Nothing),  -- 0.1 1000
+
+                        (PdEvent 3400 3 Nothing), -- 0 100
+                        (PdEvent 3501 0 (Just $ PdFloat gsh)),
+                        (PdEvent 3502 2 Nothing),  -- 0.1 1000
+                        (PdEvent 3750 0 (Just $ PdFloat ash)),
+                        (PdEvent 4000 0 (Just $ PdFloat gsh)),
+
+                        (PdEvent 4250 0 (Just $ PdFloat f)),
+
+                        (PdEvent 4500 0 (Just $ PdFloat cs)),
+
+                        (PdEvent 4750 0 (Just $ PdFloat g)),
+
+                        (PdEvent 5250 0 (Just $ PdFloat gsh)),
+                        (PdEvent 5400 0 (Just $ PdFloat ash)),
+                        (PdEvent 5550 0 (Just $ PdFloat gsh)),
+
+                        (PdEvent 7500 3 Nothing), -- 0 100
+
                         (PdEvent 4500 12 Nothing) -- metroToggle 0
              ])
 --}
