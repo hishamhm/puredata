@@ -6,7 +6,7 @@ import Debug.Trace
 import Data.List (sort)
 import Text.Printf
 
-data PdAtom = PdFloat Float
+data PdAtom = PdFloat Double
             | PdSymbol String
             | PdGPointer Int
    deriving Eq
@@ -16,12 +16,12 @@ instance Show PdAtom where
    show (PdSymbol s) = show s
    show (PdGPointer i) = "GPointer:" ++ show i
 
-type PdSample = Float
+type PdSample = Double
 
 type PdSignal = [PdSample]
 
 data PdInlet = PdControlInlet Bool String
-             | PdSignalInlet Float
+             | PdSignalInlet Double
    deriving Show
 
 data PdOutlet = PdControlOutlet String
@@ -55,8 +55,8 @@ data PdMessage = PdMessage [PdAtom]
 data PdConnection = PdConnection (Int, Int) (Int, Int)
    deriving Show
 
-               -- time, node-idx
-data PdEvent = PdEvent Int Int
+               -- time, node-idx, arg
+data PdEvent = PdEvent Int Int (Maybe PdAtom)
    deriving Show
 
 type PdBufferSize = Int
@@ -184,7 +184,7 @@ zeroDspInlets env@(PdEnv step states output) dspSort =
 
 performDsp :: PdNode -> PdNodeState -> ([PdAtom], [PdAtom])
 
-osc :: Float -> Float -> Float
+osc :: Double -> Double -> Double
 osc freq idx = sin (2 * pi / (32000 / freq) * idx)
 
 performDsp obj@(PdObject [PdSymbol "osc~", PdFloat freq] _ _) state@(PdNodeState inlets []) =
@@ -209,8 +209,11 @@ performDsp obj@(PdObject [PdSymbol "line~"] _ _) state@(PdNodeState inlets [PdFl
       (output, newInternal)
 
 performDsp obj@(PdObject [PdSymbol "*~"] _ _) state@(PdNodeState inlets []) =
-   (zipWith mult (index inlets 0) (index inlets 1), [])
-   where mult (PdFloat a) (PdFloat b) = PdFloat (a * b)
+   let
+      mult (PdFloat a) (PdFloat b) = PdFloat (a * b)
+      output = zipWith mult (index inlets 0) (index inlets 1)
+   in
+      (output, [])
 
 performDsp obj state =
    trace ("performDsp catch-all: " ++ show obj) (toList $ replicate 64 $ PdFloat 0.0, [])
@@ -225,7 +228,7 @@ run steps patch@(PdPatch _ nodes conns dspSort) events =
       
       sendMessage atoms (PdMessageBox cmds _ _) nodeIdx 0 env =
          foldl (processCommand nodeIdx) (updateInlet nodeIdx 0 atoms env) cmds
-      
+
       -- "print" object:
       
       sendMessage (PdSymbol "float" : fs) (PdObject (PdSymbol "print" : xs) _ _) _ 0 env =
@@ -280,6 +283,14 @@ run steps patch@(PdPatch _ nodes conns dspSort) events =
          in
             forEachOutlet nodeIdx (sendMessage (PdSymbol "float" : newInternal)) env
 
+      -- "osc~" object:
+
+      sendMessage [PdSymbol "float", PdFloat freq] (PdObject (PdSymbol "osc~" : _) _ _) nodeIdx 0 env@(PdEnv _ states _) =
+         let
+            (PdNodeState inlets internal) = index states nodeIdx
+         in
+            updateNodeState nodeIdx (PdNodeState inlets [PdFloat freq, PdFloat 0]) env
+
       -- "line~" object:
       
       sendMessage [PdSymbol "float", PdFloat amp, PdFloat time] (PdObject [PdSymbol "line~"] _ _) nodeIdx 0 env@(PdEnv _ states _) =
@@ -332,7 +343,7 @@ run steps patch@(PdPatch _ nodes conns dspSort) events =
             inletData = index inlets 0
             (recv, atoms) = dollarExpansion cmd (trace ("data: "++show inletData) inletData)
          in
-            case (trace ("At " ++ show idx ++ " routing " ++ show atoms ++ " to " ++ show recv ++ " " ++ show idx) recv) of
+            case (trace ("At " ++ show idx ++ " routing " ++ show atoms ++ " to " ++ show recv) recv) of
                PdToOutlet ->
                   forEachOutlet idx (sendMessage (normalizeMessage atoms)) env
                PdReceiver r ->
@@ -341,12 +352,16 @@ run steps patch@(PdPatch _ nodes conns dspSort) events =
                   printOut [PdSymbol "$1: symbol needed as message destination"] env
    
       processEvent :: PdEvent -> PdEnv -> PdEnv
-      processEvent event@(PdEvent time idx) env@(PdEnv step _ _) =
+      processEvent event@(PdEvent time idx arg) env@(PdEnv step _ _) =
          let
             node = index nodes idx
          in
-            case (trace ("New EVENT: " ++ show time ++ "/" ++ show idx ++ " for env " ++ show env) node) of
+            case (trace ("New EVENT: " ++ show time ++ "/ object " ++ show idx ++ " for env " ++ show env) node) of
                PdMessageBox cmds _ _ -> updateInlet idx 0 [] (foldl (processCommand idx) env cmds)
+               PdAtomBox _ _ _ ->
+                  case arg of
+                     Just atom -> updateInlet idx 0 [atom] (processCommand idx env (PdCommand PdToOutlet [PdTAtom atom]))
+                     Nothing -> error "Events on atom boxes expect an argument."
                _ -> env
 
       processDspTree :: PdEnv -> PdEnv
@@ -384,7 +399,7 @@ run steps patch@(PdPatch _ nodes conns dspSort) events =
          if step == steps
          then envs
          else
-            let (currEvents, nextEvents) = span (\(PdEvent time _) -> time == step) events
+            let (currEvents, nextEvents) = span (\(PdEvent time _ _) -> time == step) events
             in loop (runStep env currEvents) nextEvents (envs ++ [env])
 
    in loop (PdEnv 0 (initialState patch) []) events []
@@ -392,7 +407,7 @@ run steps patch@(PdPatch _ nodes conns dspSort) events =
 -- osc0.pd
 patch = PdPatch 10 (fromList [
             PdAtomBox    [PdFloat 0] [PdControlInlet True "bang"] [PdControlOutlet "float"],
-            PdObject     [PdSymbol "osc~", PdFloat 1000] [PdControlInlet True "float", PdControlInlet True "float"] [PdSignalOutlet],
+            PdObject     [PdSymbol "osc~", PdFloat 880] [PdControlInlet True "float", PdControlInlet True "float"] [PdSignalOutlet],
             PdMessageBox [PdCommand PdToOutlet [PdTAtom (PdFloat 0.1), PdTAtom (PdFloat 1000)]] [PdControlInlet True "bang"] [PdControlOutlet "list"],
             PdMessageBox [PdCommand PdToOutlet [PdTAtom (PdFloat 0), PdTAtom (PdFloat 100)]] [PdControlInlet True "bang"] [PdControlOutlet "list"],
             PdObject     [PdSymbol "line~"] [PdControlInlet True "list", PdControlInlet False "float"] [PdSignalOutlet],
@@ -416,12 +431,29 @@ patch = PdPatch 10 (fromList [
             PdConnection (5, 0) (6, 0)  -- line~ -> dac~
          ]) [1, 4, 5, 9, 6]
 
+getData :: PdNodeState -> [Integer]
+getData state@(PdNodeState inlets _) =
+   let
+      inlet = index inlets 0
+   in
+      map (\(PdFloat f) -> floor (((f + 1) / 2) * 65535)) inlet
+
+everyOther :: [a] -> [a]
+everyOther (x:(y:xs)) = x : everyOther xs
+everyOther x = x
+
+genOutput x = concat $ everyOther $ toList $ fmap (\env@(PdEnv _ states _) -> getData $ index states 6) x
+--genOutput x = x
+
 main :: IO ()
-main = print (fmap (\env@(PdEnv _ states _) -> index states 6) $ run 5000 patch [
-                        (PdEvent 100 11), -- metroToggle 1
-                        (PdEvent 200 2),  -- 0.1 100
-                        (PdEvent 4000 3), -- 0 100
-                        (PdEvent 4500 12) -- metroToggle 0
+main = print (genOutput $ run 5000 patch [
+                        (PdEvent 100 11 Nothing), -- metroToggle 1
+                        (PdEvent 200 2 Nothing),  -- 0.1 1000
+                        (PdEvent 1000 0 (Just $ PdFloat 900)),
+                        (PdEvent 2000 0 (Just $ PdFloat 800)),
+                        (PdEvent 3000 0 (Just $ PdFloat 700)),
+                        (PdEvent 4000 3 Nothing), -- 0 100
+                        (PdEvent 4500 12 Nothing) -- metroToggle 0
              ])
 --}
 

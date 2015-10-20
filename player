@@ -1,0 +1,18 @@
+#!/bin/sh
+
+make
+./puredata | tr ',' '\n' | tr -d '[]' > lines
+cat lines | lua -e '
+for s in io.stdin:lines() do
+   local n = tonumber(s)
+   io.stdout:write(string.char(n // 256), string.char(n % 256))
+end' > binario
+rm output.wav
+ffmpeg -f u16be -ar 32000 -ac 1 -i binario output.wav
+mplayer output.wav
+
+#mplayer -af format=u16le -rawaudio channels=1:rate=32000:samplesize=2  -demuxer rawaudio binario
+
+
+
+
