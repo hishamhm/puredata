@@ -410,7 +410,7 @@ run steps patch@(PdPatch _ nodes conns dspSort) events =
 patch = PdPatch 10 (fromList [
             PdAtomBox    [PdFloat 0] [PdControlInlet True "bang"] [PdControlOutlet "float"],
             PdObject     [PdSymbol "osc~", PdFloat gsh] [PdControlInlet True "float", PdControlInlet True "float"] [PdSignalOutlet],
-            PdMessageBox [PdCommand PdToOutlet [PdTAtom (PdFloat 0.25), PdTAtom (PdFloat 1000)]] [PdControlInlet True "bang"] [PdControlOutlet "list"],
+            PdMessageBox [PdCommand PdToOutlet [PdTAtom (PdFloat 0.5), PdTAtom (PdFloat 1000)]] [PdControlInlet True "bang"] [PdControlOutlet "list"],
             PdMessageBox [PdCommand PdToOutlet [PdTAtom (PdFloat 0), PdTAtom (PdFloat 100)]] [PdControlInlet True "bang"] [PdControlOutlet "list"],
             PdObject     [PdSymbol "line~"] [PdControlInlet True "list", PdControlInlet False "float"] [PdSignalOutlet],
             PdObject     [PdSymbol "*~"] [PdSignalInlet 0, PdSignalInlet 0] [PdSignalOutlet],
@@ -447,7 +447,7 @@ everyOther x = x
 genOutput x = concat $ everyOther $ toList $ fmap (\env@(PdEnv _ states _) -> getData $ index states 6) x
 --genOutput x = x
 
-cs = 554.37
+csh = 554.37
 ash = 932.33
 g = 783.99
 gsh = 830.61
@@ -458,7 +458,7 @@ main = print (genOutput $ run 10000 patch [
                         (PdEvent 5 11 Nothing), -- metroToggle 1
                         (PdEvent 10 2 Nothing),  -- 0.1 1000
                         (PdEvent 900 3 Nothing), -- 0 100
-                        (PdEvent 1001 0 (Just $ PdFloat cs)),
+                        (PdEvent 1001 0 (Just $ PdFloat csh)),
                         (PdEvent 1002 2 Nothing),  -- 0.1 1000
 
                         (PdEvent 1900 3 Nothing), -- 0 100
@@ -474,7 +474,7 @@ main = print (genOutput $ run 10000 patch [
 
                         (PdEvent 4333 0 (Just $ PdFloat f)),
 
-                        (PdEvent 4666 0 (Just $ PdFloat cs)),
+                        (PdEvent 4666 0 (Just $ PdFloat csh)),
 
                         (PdEvent 5000 0 (Just $ PdFloat g)),
 
