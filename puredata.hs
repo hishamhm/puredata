@@ -283,7 +283,7 @@ run steps patch@(PdPatch _ nodes conns dspSort) events =
             newInternal = [PdFloat (val0 + val1)]
             env' = updateNodeState nodeIdx (PdNodeState inlets newInternal) env
          in
-            forEachOutlet nodeIdx (sendMessage (PdSymbol "float" : newInternal)) env
+            forEachOutlet nodeIdx (sendMessage (PdSymbol "float" : newInternal)) env'
 
       -- "osc~" object:
 
@@ -398,40 +398,13 @@ run steps patch@(PdPatch _ nodes conns dspSort) events =
       
       loop :: PdEnv -> [PdEvent] -> [PdEnv] -> [PdEnv]
       loop env@(PdEnv step _ _) events envs =
-         if step == steps
+         if step > steps
          then envs
          else
             let (currEvents, nextEvents) = span (\(PdEvent time _ _) -> time == step) events
             in loop (runStep env currEvents) nextEvents (envs ++ [env])
 
    in loop (PdEnv 0 (initialState patch) []) events []
-
--- osc0.pd
-patch = PdPatch 10 (fromList [
-            PdAtomBox    [PdFloat 0] [PdControlInlet True "bang"] [PdControlOutlet "float"],
-            PdObject     [PdSymbol "osc~", PdFloat gsh] [PdControlInlet True "float", PdControlInlet True "float"] [PdSignalOutlet],
-            PdMessageBox [PdCommand PdToOutlet [PdTAtom (PdFloat 0.5), PdTAtom (PdFloat 1000)]] [PdControlInlet True "bang"] [PdControlOutlet "list"],
-            PdMessageBox [PdCommand PdToOutlet [PdTAtom (PdFloat 0), PdTAtom (PdFloat 100)]] [PdControlInlet True "bang"] [PdControlOutlet "list"],
-            PdObject     [PdSymbol "line~"] [PdControlInlet True "list", PdControlInlet False "float"] [PdSignalOutlet],
-            PdObject     [PdSymbol "*~"] [PdSignalInlet 0, PdSignalInlet 0] [PdSignalOutlet],
-            PdObject     [PdSymbol "dac~"] [PdSignalInlet 0] [],
-            PdObject     [PdSymbol "r", PdSymbol "metroToggle"] [] [PdControlOutlet "bang"],
-            PdObject     [PdSymbol "metro", PdFloat 500] [PdControlInlet True "bang"] [PdControlOutlet "bang"],
-            PdObject     [PdSymbol "tabwrite~", PdSymbol "array99"] [PdControlInlet True "signal"] [],
-            PdGObject    [PdSymbol "array99"] [] [],
-            PdMessageBox [PdCommand (PdReceiver "metroToggle") [PdTAtom (PdFloat 1.0)]] [] [],
-            PdMessageBox [PdCommand (PdReceiver "metroToggle") [PdTAtom (PdFloat 0.0)]] [] []
-         ]) (fromList [
-            PdConnection (0, 0) (1, 0), -- 0 -> osc~
-            PdConnection (1, 0) (5, 0), -- osc~ -> *~
-            PdConnection (1, 0) (9, 0), -- osc~ -> tabwrite~
-            PdConnection (7, 0) (8, 0), -- r -> metro
-            PdConnection (8, 0) (9, 0), -- metro -> tabwrite~
-            PdConnection (2, 0) (4, 0), -- 0.1 100 -> line~
-            PdConnection (3, 0) (4, 0), -- 0 100 -> line~
-            PdConnection (4, 0) (5, 1), -- line~ -> *~
-            PdConnection (5, 0) (6, 0)  -- line~ -> dac~
-         ]) [1, 4, 5, 9, 6]
 
 getData :: PdNodeState -> [Integer]
 getData state@(PdNodeState inlets _) =
@@ -452,6 +425,34 @@ ash = 932.33
 g = 783.99
 gsh = 830.61
 f = 698.46
+
+--
+-- osc0.pd
+patch = PdPatch 10 (fromList [
+            PdAtomBox    [PdFloat 0] [PdControlInlet True "bang"] [PdControlOutlet "float"],
+            PdObject     [PdSymbol "osc~", PdFloat gsh] [PdControlInlet True "float", PdControlInlet True "float"] [PdSignalOutlet],
+            PdMessageBox [PdCommand PdToOutlet [PdTAtom (PdFloat 0.5), PdTAtom (PdFloat 1000)]] [PdControlInlet True "bang"] [PdControlOutlet "list"],
+            PdMessageBox [PdCommand PdToOutlet [PdTAtom (PdFloat 0), PdTAtom (PdFloat 100)]] [PdControlInlet True "bang"] [PdControlOutlet "list"],
+            PdObject     [PdSymbol "line~"] [PdControlInlet True "list", PdControlInlet False "float"] [PdSignalOutlet],
+            PdObject     [PdSymbol "*~"] [PdSignalInlet 0, PdSignalInlet 0] [PdSignalOutlet],
+            PdObject     [PdSymbol "dac~"] [PdSignalInlet 0] [],
+            PdObject     [PdSymbol "r", PdSymbol "metroToggle"] [] [PdControlOutlet "bang"],
+            PdObject     [PdSymbol "metro", PdFloat 500] [PdControlInlet True "bang"] [PdControlOutlet "bang"],
+            PdObject     [PdSymbol "tabwrite~", PdSymbol "array99"] [PdControlInlet True "signal"] [],
+            PdGObject    [PdSymbol "array99"] [] [],
+            PdMessageBox [PdCommand (PdReceiver "metroToggle") [PdTAtom (PdFloat 1.0)]] [PdControlInlet True "bang"] [PdControlOutlet "list"],
+            PdMessageBox [PdCommand (PdReceiver "metroToggle") [PdTAtom (PdFloat 0.0)]] [PdControlInlet True "bang"] [PdControlOutlet "list"]
+         ]) (fromList [
+            PdConnection (0, 0) (1, 0), -- 0 -> osc~
+            PdConnection (1, 0) (5, 0), -- osc~ -> *~
+            PdConnection (1, 0) (9, 0), -- osc~ -> tabwrite~
+            PdConnection (7, 0) (8, 0), -- r -> metro
+            PdConnection (8, 0) (9, 0), -- metro -> tabwrite~
+            PdConnection (2, 0) (4, 0), -- 0.1 100 -> line~
+            PdConnection (3, 0) (4, 0), -- 0 100 -> line~
+            PdConnection (4, 0) (5, 1), -- line~ -> *~
+            PdConnection (5, 0) (6, 0)  -- line~ -> dac~
+         ]) [1, 4, 5, 9, 6]
 
 main :: IO ()
 main = print (genOutput $ run 10000 patch [
@@ -491,7 +492,8 @@ main = print (genOutput $ run 10000 patch [
              ])
 --}
 
-{-- messages.pd
+{--
+-- messages.pd
 patch = PdPatch 10 (fromList [
             PdMessageBox [PdCommand PdToOutlet [PdTAtom (PdSymbol "list"), PdTAtom (PdFloat 1), PdTAtom (PdFloat 2)], PdCommand PdToOutlet [PdTAtom (PdSymbol "list"), PdTAtom (PdFloat 10), PdTAtom (PdFloat 20)]] [PdControlInlet True "list"] [], 
             PdMessageBox [PdCommand PdToOutlet [PdTAtom (PdSymbol "list"), PdTAtom (PdSymbol "foo"), PdTAtom (PdFloat 5), PdTAtom (PdFloat 6)]] [PdControlInlet True "list"] [], 
@@ -512,7 +514,7 @@ patch = PdPatch 10 (fromList [
          ]) []
 
 main :: IO ()
-main = print (run 30 patch [(PdEvent 1 0), (PdEvent 3 1)])
+main = print (run 30 patch [(PdEvent 1 0 Nothing), (PdEvent 3 1 Nothing)])
 --}
 
 {-- inc.pd
