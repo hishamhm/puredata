@@ -295,7 +295,7 @@ run steps patch@(PdPatch _ nodes conns dspSort) events =
 
       -- "line~" object:
       
-      sendMessage [PdSymbol "float", PdFloat amp, PdFloat time] (PdObject [PdSymbol "line~"] _ _) nodeIdx 0 env@(PdEnv _ states _) =
+      sendMessage [PdSymbol "list", PdFloat amp, PdFloat time] (PdObject [PdSymbol "line~"] _ _) nodeIdx 0 env@(PdEnv _ states _) =
          let
             (PdNodeState inlets internal) = index states nodeIdx
             [PdFloat current, PdFloat target, PdFloat delta] = if internal /= [] then internal else [PdFloat 0, PdFloat 0, PdFloat 0]
@@ -334,8 +334,8 @@ run steps patch@(PdPatch _ nodes conns dspSort) events =
             handle env _ _ = env
 
       normalizeMessage :: [PdAtom] -> [PdAtom]
-      normalizeMessage atoms@[PdFloat f]      = (PdSymbol "float" : atoms)
-      --normalizeMessage atoms@(PdFloat f : xs) = (PdSymbol "list"  : atoms)
+      normalizeMessage atoms@[PdFloat f]   = (PdSymbol "float" : atoms)
+      normalizeMessage atoms@(PdFloat f : xs) = (PdSymbol "list"  : atoms)
       normalizeMessage atoms = atoms
 
       processCommand :: Int -> PdEnv -> PdCommand -> PdEnv

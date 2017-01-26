@@ -1,4 +1,4 @@
-\documentclass[9pt,a4paper]{article}
+\documentclass[a4paper]{article}
 \setlength{\parskip}{\baselineskip}
 \usepackage[margin=3cm]{geometry}
 %include lhs2TeX.fmt
@@ -722,7 +722,7 @@ from the current value to the new target.
 \begin{code}
 
 sendMessage  (PdObject [PdSymbol "line~"] _ _)
-             [PdSymbol "float", PdFloat amp, PdFloat time] 0 
+             [PdSymbol "list", PdFloat amp, PdFloat time] 0 
              (PdNodeState ins mem) =
    let
       [PdFloat current, PdFloat target, PdFloat delta] =

@@ -10,6 +10,7 @@ puredata.tex: puredata.lhs
 	~/.cabal/bin/lhs2TeX puredata.lhs > puredata.tex
 
 puredata: puredata.lhs
+	rm -f puredata.o puredata.hi
 	ghc -o puredata puredata.lhs
 
 lhs_lines: puredata
@@ -23,6 +24,7 @@ diff_ok: hs_lines lhs_lines
 	[ `stat -c '%s' diff_ok` = 0 ]
 
 puredata_hs: puredata.hs
+	rm -f puredata.o puredata.hi
 	ghc -o puredata_hs puredata.hs
 
 hs_lines:
@@ -32,6 +34,6 @@ warn:
 	ghc -o puredata -Wall puredata.lhs
 
 clean:
-	rm -f puredata puredata.hi puredata.tex puredata.pdf
+	rm -f puredata puredata.o puredata.hi puredata.tex puredata.pdf
 
 
