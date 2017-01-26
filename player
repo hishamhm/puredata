@@ -7,8 +7,8 @@ set terminal png
 set output "plot.png"
 plot "lines" with lines
 EOF
-#gnuplot lines.plot
-#xdg-open ./plot.png
+gnuplot lines.plot
+xdg-open ./plot.png
 cat lines | lua -e '
 for s in io.stdin:lines() do
    local n = tonumber(s)

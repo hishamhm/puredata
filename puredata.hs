@@ -334,8 +334,8 @@ run steps patch@(PdPatch _ nodes conns dspSort) events =
             handle env _ _ = env
 
       normalizeMessage :: [PdAtom] -> [PdAtom]
-      normalizeMessage atoms@(PdFloat f : xs) =
-         (PdSymbol "float" : atoms)
+      normalizeMessage atoms@[PdFloat f]      = (PdSymbol "float" : atoms)
+      --normalizeMessage atoms@(PdFloat f : xs) = (PdSymbol "list"  : atoms)
       normalizeMessage atoms = atoms
 
       processCommand :: Int -> PdEnv -> PdCommand -> PdEnv
