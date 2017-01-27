@@ -17,10 +17,9 @@ language, so the goal here is clarity, not performance.
 This implementation uses only standard modules included in the Haskell Platform:
 
 \begin{code}
-import Data.Sequence (Seq, fromList, index, update)
-import qualified Data.Sequence (length, foldlWithIndex)
+import Data.Sequence (Seq, fromList, index, update, foldlWithIndex)
+import qualified Data.Sequence as Seq (length)
 import Data.Foldable (foldl', toList)
-import qualified Data.Foldable (foldl)
 import Data.List (sort, intercalate)
 import Text.Printf
 import Data.Fixed
@@ -347,7 +346,7 @@ firing the data to the appropriate inlets of all matching connections.
 
 forEachInOutlet :: PdPatch -> (Int, Int) -> [PdAtom] -> PdState -> PdState
 forEachInOutlet p srcPair atoms s =
-   Data.Foldable.foldl handle s (pConns p)
+   foldl' handle s (pConns p)
    where
       handle :: PdState -> PdConnection -> PdState
       handle s (PdConnection from to@(dst, inl))
@@ -441,7 +440,7 @@ forEachReceiver :: PdPatch  -> String
                             -> [PdAtom]
                             -> PdState -> PdState
 forEachReceiver p name atoms s =
-   Data.Sequence.foldlWithIndex handle s (pNodes p)
+   foldlWithIndex handle s (pNodes p)
    where
       handle :: PdState -> Int -> PdNode -> PdState
       handle s dst (PdObject (PdSymbol "receive" : (PdSymbol rname : _)) _ _)
@@ -468,7 +467,7 @@ runDspTree :: PdPatch -> PdState -> PdState
 runDspTree p s =
    s { sNss = nss' }
    where
-      nss' = foldl handle (zeroDspInlets (sNss s) (pDspSort p)) (pDspSort p)
+      nss' = foldl' handle (zeroDspInlets (sNss s) (pDspSort p)) (pDspSort p)
 
       handle :: (Seq PdNodeState) -> Int -> (Seq PdNodeState)
       handle nss nidx =
@@ -478,7 +477,7 @@ runDspTree p s =
             (outDsp, mem') = performDsp obj ns
             nss'' = update nidx (PdNodeState ins mem') nss
          in
-            Data.Foldable.foldl (propagate outDsp) nss'' (pConns p)
+            foldl' (propagate outDsp) nss'' (pConns p)
             where
                propagate :: [[PdAtom]] -> (Seq PdNodeState) -> PdConnection -> (Seq PdNodeState)
                propagate outDsp nss (PdConnection (src, outl) (dst, inl))
@@ -503,7 +502,7 @@ zeroDspInlets nss dspSort =
 
          zeroState :: PdNodeState -> PdNodeState
          zeroState (PdNodeState ins mem) =
-            PdNodeState (zeroInlets (Data.Sequence.length ins)) mem
+            PdNodeState (zeroInlets (Seq.length ins)) mem
 
          clearNss :: Int -> [PdNodeState] -> [Int] -> [PdNodeState]
          clearNss i (st:sts) indices@(nidx:idxs)
