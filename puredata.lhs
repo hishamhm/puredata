@@ -141,14 +141,15 @@ data PdNodeState = PdNodeState (Seq [PdAtom]) [PdAtom]
 \end{code}
 
 We represent events with a timestamp, the node index indicating which node was
-triggered, and an optional atom representing data entered by the user.
+triggered, and a list of atoms representing the event data (such as the number
+entered by the user in an atom box).
 
 \begin{code}
 
 data PdEvent =  PdEvent {
                    eTs    :: Int,
                    eNidx  :: Int,
-                   eArg   :: (Maybe PdAtom)
+                   eArg   :: [PdAtom]
                 }
    deriving (Show, Eq, Ord)
 
@@ -212,6 +213,11 @@ timestamp, and hands it over to the main evaluation function, \emph{runStep},
 which, given a patch, the current state, and a list of events, produces
 a new state.
 
+Processing a step may produce new future events to be scheduled. These are
+sorted along with the existing events of the input. Runtime events are
+produced by the interpreter using relative timestamps (where 0 means ``now''),
+so we adjust them to absolute time using auxiliary function \emph{adjTime}.
+
 The function \emph{runStep} processes events and the DSP tree. Following the
 specified semantics of Pure Data, this happens in an alternating fashion: all
 pending messages for a given timestamp are handled, and then the entire DSP
@@ -260,29 +266,93 @@ runImmediateEvents p s =
 
 Two kinds of events can be triggered by the user. Message boxes may be
 clicked, processing all commands stored inside them, or new numeric values
-may be entered into atom boxes.
-
-Updating an atom box causes the new value to be fired to its outlet. We do it
-producing a synthetic command (\emph{atomCmd}) when handling events on
-\emph{PdAtomBox} objects. \emph{PdMessageBox} may contain multiple commands
-(which are semicolon-separated in the textual syntax), so we fold over that
-list, running each command.
+may be entered into atom boxes. We do it producing a synthetic firing
+of the relevant node.
 
 \begin{code}
 
 runEvent :: PdPatch -> PdState -> PdEvent -> PdState
-runEvent p s event@(PdEvent ts nidx arg) =
-   case (index (pNodes p) nidx) of
-      PdAtomBox _ ->
-         case arg of
-            Just atom ->
-               let atomCmd = PdCommand PdToOutlet [PdTAtom atom]
-               in runCommand p nidx s atomCmd
-            Nothing ->
-               error "Events on atom boxes expect an argument."
-      PdMessageBox cmds ->
-         foldl' (runCommand p nidx) s cmds
-      _ -> s
+runEvent p s event@(PdEvent ts nidx args) =
+   fire p (index (pNodes p) nidx) args (nidx, 0) s
+
+\end{code}
+
+The \emph{fire} function invokes the appropriate action for a node, producing
+a new state.
+
+\begin{code}
+
+fire :: PdPatch -> PdNode -> [PdAtom] -> (Int, Int) -> PdState -> PdState
+
+\end{code}
+
+Depending on the type of node, we perform different actions. For message
+boxes, we feed the incoming atoms into the inlet, and then we fold over its
+triggering its commands, like when they are clicked by the user. As we will
+see below in the definition of \emph{runCommand}, this may fire further nodes
+either directly or indirectly.
+
+\begin{code}
+
+fire p (PdMessageBox cmds) atoms (nidx, inl) s =
+   let
+      (PdNodeState ins mem) = index (sNss s) nidx
+      ns' = PdNodeState (update inl atoms ins) mem
+      s' = s { sNss = (update nidx ns' (sNss s)) }
+   in
+      foldl' (runCommand p nidx) s' cmds
+
+\end{code}
+
+For objects and atom boxes, we hand over the incoming data to the
+\emph{sendMessage} handler function, which implements the various behaviors
+supported by different Pure Data objects. The function \emph{sendMessage}
+returns a tuple with the updated node state, log outputs produced (if any),
+data to be sent via outlets and new events to be scheduled. We update the
+state with this data, adjusting the node index of the returned events to point
+them to that of the current node ($nidx$): a node can only schedule events for
+itself. Finally, we propagate the data through the outlets, processing them
+from right to left, as mandated by the Pure Data specification.
+
+\begin{code}
+
+fire p node atoms (nidx, inl) s =
+   let
+      ns = index (sNss s) nidx
+      (ns', logw', outlets, evs) = sendMessage node atoms inl ns
+      s' = s {
+         sNss    = update nidx ns' (sNss s),
+         sLog    = (sLog s) ++ logw',
+         sSched  = (sSched s) ++ (map (\e -> e { eNidx = nidx }) evs)
+      }
+
+      propagate :: PdState -> ([PdAtom], Int) -> PdState
+      propagate s (atoms, outl) =
+         if atoms == []
+         then s
+         else forEachInOutlet p (nidx, outl) atoms s
+   in
+      foldl' propagate s' (zip (reverse outlets) [length outlets - 1..0])
+
+\end{code}
+
+When propagating data, we send it to every connected outlet of a node. A node
+may have multiple outlets and multiple nodes can be connected to a single
+outlet. This function takes the patch, a $\left(node, outlet\right)$ pair of
+indices indicating the source of the data, the data itself (a list of atoms),
+and the current state. It folds over the list of connections of the patch,
+firing the data to the appropriate inlets of all matching connections.
+
+\begin{code}
+
+forEachInOutlet :: PdPatch -> (Int, Int) -> [PdAtom] -> PdState -> PdState
+forEachInOutlet p srcPair atoms s =
+   Data.Foldable.foldl handle s (pConns p)
+   where
+      handle :: PdState -> PdConnection -> PdState
+      handle s (PdConnection from to@(dst, inl))
+         | srcPair == from  = fire p (index (pNodes p) dst) atoms to s
+         | otherwise        = s
 
 \end{code}
 
@@ -357,89 +427,13 @@ dollarExpansion (PdCommand recv tokens) inlData =
 
 \end{code}
 
-When sending a command, we propagate it to every connected outlet of a node.
-This function takes the patch, a $\left(node, outlet\right)$ pair of indices
-indicating the source of the data, the data itself (a list of atoms), and the
-current state. It folds over the list of connections of the patch, firing
-the data to the appropriate inlets of all matching connections.
-
-\begin{code}
-
-forEachInOutlet :: PdPatch -> (Int, Int) -> [PdAtom] -> PdState -> PdState
-forEachInOutlet p srcPair atoms s =
-   Data.Foldable.foldl handle s (pConns p)
-   where
-      handle :: PdState -> PdConnection -> PdState
-      handle s (PdConnection from to@(dst, inl))
-         | srcPair == from  = fire p (index (pNodes p) dst) atoms to s
-         | otherwise        = s
-
-\end{code}
-
-The \emph{fire} function invokes the appropriate action for a node, producing
-a new state.
-
-\begin{code}
-
-fire :: PdPatch -> PdNode -> [PdAtom] -> (Int, Int) -> PdState -> PdState
-
-\end{code}
-
-Depending on the type of node, we perform different actions. For message
-boxes, we feed the incoming atoms into the inlet, and then we fold over its
-triggering its commands, like when they are clicked by the user. As we
-saw in \emph{runCommand}, this may fire further nodes either directly or
-indirectly.
-
-\begin{code}
-
-fire p (PdMessageBox cmds) atoms (nidx, inl) s =
-   let
-      (PdNodeState ins mem) = index (sNss s) nidx
-      ns' = PdNodeState (update inl atoms ins) mem
-      s' = s { sNss = (update nidx ns' (sNss s)) }
-   in
-      foldl' (runCommand p nidx) s' cmds
-
-\end{code}
-
-For objects and atom boxes, we hand over the incoming data to the
-\emph{sendMessage} handler function, which implements the various behaviors
-supported by different Pure Data objects. The function \emph{sendMessage}
-returns a tuple with the updated node state, log outputs produced (if any),
-data to be sent via outlets and new events to be scheduled. We update the
-state with this data. Finally, we propagate the data through the outlets,
-processing them from right to left, as mandated by the Pure Data
-specification.
-
-\begin{code}
-
-fire p node atoms (nidx, inl) s =
-   let
-      ns = index (sNss s) nidx
-      (ns', logw', outlets, evs) = sendMessage node atoms inl ns
-      s' = s {
-         sNss    = update nidx ns' (sNss s),
-         sLog    = (sLog s) ++ logw',
-         sSched  = (sSched s) ++ evs
-      }
-
-      propagate :: PdState -> ([PdAtom], Int) -> PdState
-      propagate s (atoms, outl) =
-         if atoms == []
-         then s
-         else forEachInOutlet p (nidx, outl) atoms s
-   in
-      foldl' propagate s' (zip (reverse outlets) [length outlets - 1..0])
-
-\end{code}
-
-Indirect connections are handled similarly. Instead of folding over the list
-of connections, we fold over the list of nodes, looking for objects declared
-as \texttt{receive $name$}. Note that the search happens over the
-statically-declared list of nodes of the patch. While it is possible construct
-a message at runtime and determine the receiver dynamically, it is not
-possible to change the identifier of a \texttt{receive} node at runtime.
+Indirect connections are handled similarly to outlet connections, but instead
+of folding over the list of connections, we fold over the list of nodes,
+looking for objects declared as \texttt{receive $name$}. Note that the search
+happens over the statically-declared list of nodes of the patch. While it is
+possible construct a message at runtime and determine the receiver
+dynamically, it is not possible to change the identifier of a \texttt{receive}
+node at runtime.
 
 \begin{code}
 
@@ -613,7 +607,7 @@ our goal was not to produce a full-fledged computer music application, but
 we included a few representative objects that allow us to demonstrate the
 interpreter and the various behaviors of objects.
 
-\subsubsection{print}
+\subsubsection{\texttt{print}}
 
 The \texttt{print} object accepts data through its inlet and prints it to
 the log console.
@@ -631,7 +625,7 @@ sendMessage (PdObject (PdSymbol "print" : xs) _ _) atoms 0 ns =
 
 \end{code}
 
-\subsubsection{float}
+\subsubsection{\texttt{float}}
 
 In Pure Data, the first inlet of a node is the ``hot'' inlet; when data is
 received through it, the action of the node is performed. When data arrives in
@@ -660,7 +654,7 @@ sendMessage  (PdObject (PdSymbol "float" : xs) inl _) [PdSymbol "bang"] 0
 
 \end{code}
 
-\subsubsection{+}
+\subsubsection{\texttt{+}}
 
 The \texttt{+} object also demonstrates the behavior of hot and cold inlets. 
 When a number arrives in the hot inlet, it sums the values in inlets 0 and 1
@@ -694,9 +688,61 @@ sendMessage  (PdObject [PdSymbol "+", n] _ _) [PdSymbol "bang"] 0
 
 \end{code}
 
-\subsubsection{osc~}
+\subsubsection{\texttt{delay}}
 
-Some audio objects in Pure Data also accept messages. The \texttt{osc~} object
+The \texttt{delay} object demonstrates how objects generate future events.
+We handle four cases: receiving a \texttt{bang} message schedules a
+\texttt{tick} event. When received, it outputs a \texttt{bang} to the 
+node's outlets.
+
+\begin{code}
+
+sendMessage (PdObject [PdSymbol "delay", PdFloat time] inl _) [PdSymbol "bang"] 0 ns =
+   (ns, [], [], [PdEvent (floor time) 0 [PdSymbol "tick"]])
+
+sendMessage (PdObject (PdSymbol "delay" : t) inl _) [PdSymbol "tick"] 0 ns =
+   (ns, [], [[PdSymbol "bang"]], [])
+
+\end{code}
+
+\subsubsection{\texttt{metro}}
+
+This node expands on the \texttt{delay} functionality, implementing a
+metronome, which sends a series of \texttt{bang} messages at regular time
+intervals. It also has a second inlet which allows updating the interval.
+
+We handle four cases: receiving a \texttt{bang} message to start the
+metronome, receiving a \texttt{stop} message to stop it, and receiving the
+internally-scheduled \texttt{tick} when the metronome is either on or off.
+
+\begin{code}
+
+sendMessage  (PdObject (PdSymbol "metro" : xs) inl _) [PdSymbol "bang"] 0 
+             (PdNodeState ins mem) =
+   let
+      inlet1 = index ins 1
+      (PdFloat time) = head (inlet1 ++ mem ++ xs ++ [PdFloat 1000])
+      ns' = PdNodeState (emptyInlets inl) [PdFloat time, PdSymbol "on"]
+   in
+      (ns', [], [[PdSymbol "bang"]], [PdEvent (floor time) 0 [PdSymbol "tick"]])
+
+sendMessage  (PdObject (PdSymbol "metro" : xs) inl _) [PdSymbol "stop"] 0 
+             (PdNodeState ins [PdFloat time, PdSymbol "on"]) =
+   (PdNodeState ins [PdFloat time, PdSymbol "off"], [], [], [])
+
+sendMessage  (PdObject (PdSymbol "metro" : xs) inl _) [PdSymbol "tick"] 0 
+             ns@(PdNodeState ins [PdFloat time, PdSymbol "on"]) =
+   (ns, [], [[PdSymbol "bang"]], [PdEvent (floor time) 0 [PdSymbol "tick"]])
+
+sendMessage  (PdObject (PdSymbol "metro" : xs) inl _) [PdSymbol "tick"] 0 
+             ns@(PdNodeState ins [_, PdSymbol "off"]) =
+   (ns, [], [], [])
+
+\end{code}
+
+\subsubsection{\texttt{osc\~}}
+
+Some audio objects in Pure Data also accept messages. The \texttt{osc\~} object
 implements a sinewave oscillator. Sending a float to it, we configure its
 frequency, which is stored in the node's internal memory. Note that the actual
 oscillator is not implemented here, but in the DSP handler for this object
@@ -710,10 +756,10 @@ sendMessage  (PdObject (PdSymbol "osc~" : _) _ _) [PdSymbol "float", PdFloat fre
 
 \end{code}
 
-\subsubsection{line~}
+\subsubsection{\texttt{line\~}}
 \label{linemsg}
 
-The \texttt{line~} object implements a linear function over time. It can be used,
+The \texttt{line\~} object implements a linear function over time. It can be used,
 for example, to implement gradual changes of frequency or amplitude. Its internal
 memory stores values $current$, $target$ and $delta$. It accepts a message with
 two floats, indicating the new target value and the time interval to take ramping
@@ -785,7 +831,7 @@ updated internal data for the node.
 We implement a small number of objects, that nevertheless will allow us to
 make a realistic audio demonstration.
 
-\subsubsection{osc~}
+\subsubsection{\texttt{osc\~}}
 \label{oscdsp}
 
 This is the sinewave oscillator. It holds two values in its internal memory,
@@ -818,10 +864,10 @@ performDsp  (PdObject [PdSymbol "osc~", _] _ _)
 
 \end{code}
 
-\subsubsection{line~}
+\subsubsection{\texttt{line\~}}
 
-As described in Section~\ref{linemsg}, the \texttt{line~} object implements a
-linear ramp over time. As in {osc~} we handle two cases: when the internal
+As described in Section~\ref{linemsg}, the \texttt{line\~} object implements a
+linear ramp over time. As in \texttt{osc\~} we handle two cases: when the internal
 memory of the object is empty, in which case we initialize it; and when it is
 initialized with \emph{current}, \emph{target} and \emph{delta} values. The
 function varies linearly over time from \emph{current} to \emph{target}, after
@@ -832,7 +878,8 @@ which, it stays constant at \emph{target}.
 performDsp obj@(PdObject [PdSymbol "line~"] _ _) (PdNodeState ins []) =
    performDsp obj (PdNodeState ins [PdFloat 0, PdFloat 0, PdFloat 0])
 
-performDsp (PdObject [PdSymbol "line~"] _ _) (PdNodeState ins [PdFloat current, PdFloat target, PdFloat delta]) =
+performDsp  (PdObject [PdSymbol "line~"] _ _)
+            (PdNodeState ins [PdFloat current, PdFloat target, PdFloat delta]) =
    let
       limiter = if delta > 0 then min else max
       output = map PdFloat $ tail $ take 65 $ iterate (\v -> limiter target (v + delta)) current
@@ -842,7 +889,7 @@ performDsp (PdObject [PdSymbol "line~"] _ _) (PdNodeState ins [PdFloat current, 
 
 \end{code}
 
-\subsubsection{*~}
+\subsubsection{\texttt{*\~}}
 
 This object multiplies the data from inlets 0 and 1. It is used, for example,
 to modify the amplitude of an audio wave.
@@ -906,15 +953,15 @@ example = PdPatch (fromList [
             PdMessageBox  [PdCommand (PdReceiver "toggle") [PdTAtom (PdFloat 1.0)]],
             PdMessageBox  [PdCommand (PdReceiver "toggle") [PdTAtom (PdFloat 0.0)]]
          ]) (fromList [
-            PdConnection (0, 0) (1, 0),  -- 0 $\rightarrow$ osc~
-            PdConnection (1, 0) (5, 0),  -- osc~ $\rightarrow$ *~
-            PdConnection (1, 0) (9, 0),  -- osc~ $\rightarrow$ tabwrite~
-            PdConnection (7, 0) (8, 0),  -- r $\rightarrow$ metro
-            PdConnection (8, 0) (9, 0),  -- metro $\rightarrow$ tabwrite~
-            PdConnection (2, 0) (4, 0),  -- 0.1 100 $\rightarrow$ line~
-            PdConnection (3, 0) (4, 0),  -- 0 100 $\rightarrow$ line~
-            PdConnection (4, 0) (5, 1),  -- line~ $\rightarrow$ *~
-            PdConnection (5, 0) (6, 0)   -- line~ $\rightarrow$ dac~
+            PdConnection (0, 0) (1, 0),  --  \texttt{0}        $\rightarrow$  \texttt{osc\~}
+            PdConnection (1, 0) (5, 0),  --  \texttt{osc\~}    $\rightarrow$  \texttt{*\~}
+            PdConnection (1, 0) (9, 0),  --  \texttt{osc\~}    $\rightarrow$  \texttt{tabwrite\~}
+            PdConnection (7, 0) (8, 0),  --  \texttt{receive}  $\rightarrow$  \texttt{metro}
+            PdConnection (8, 0) (9, 0),  --  \texttt{metro}    $\rightarrow$  \texttt{tabwrite\~}
+            PdConnection (2, 0) (4, 0),  --  \texttt{0.1 100}  $\rightarrow$  \texttt{line\~}
+            PdConnection (3, 0) (4, 0),  --  \texttt{0 100}    $\rightarrow$  \texttt{line\~}
+            PdConnection (4, 0) (5, 1),  --  \texttt{line\~}   $\rightarrow$  \texttt{*\~}
+            PdConnection (5, 0) (6, 0)   --  \texttt{line\~}   $\rightarrow$  \texttt{dac\~}
          ]) [1, 4, 5, 9, 6]
 
 \end{code}
@@ -928,44 +975,44 @@ main =
    print 
    $ genOutput
    $ runSteps 10000 example [
-      (PdEvent 5 11 Nothing), -- toggle 1
-      (PdEvent 10 2 Nothing),  -- 0.1 1000
-      (PdEvent 900 3 Nothing), -- 0 100
-      (PdEvent 1001 0 (Just $ PdFloat cSharp)),
-      (PdEvent 1002 2 Nothing),  -- 0.1 1000
+      (PdEvent 5 11 [PdSymbol "bang"]), -- toggle 1
+      (PdEvent 10 2 [PdSymbol "bang"]),  -- 0.1 1000
+      (PdEvent 900 3 [PdSymbol "bang"]), -- 0 100
+      (PdEvent 1001 0 [PdSymbol "float", PdFloat cSharp]),
+      (PdEvent 1002 2 [PdSymbol "bang"]),  -- 0.1 1000
       
-      (PdEvent 1900 3 Nothing), -- 0 100
-      (PdEvent 2001 0 (Just $ PdFloat g)),
-      (PdEvent 2002 2 Nothing),  -- 0.1 1000
+      (PdEvent 1900 3 [PdSymbol "bang"]), -- 0 100
+      (PdEvent 2001 0 [PdSymbol "float", PdFloat g]),
+      (PdEvent 2002 2 [PdSymbol "bang"]),  -- 0.1 1000
       
-      (PdEvent 3660 3 Nothing), -- 0 100
-      (PdEvent 3749 2 Nothing),  -- 0.1 1000
+      (PdEvent 3660 3 [PdSymbol "bang"]), -- 0 100
+      (PdEvent 3749 2 [PdSymbol "bang"]),  -- 0.1 1000
       
-      (PdEvent 3750 0 (Just $ PdFloat gSharp)),
-      (PdEvent 3875 0 (Just $ PdFloat aSharp)),
-      (PdEvent 4000 0 (Just $ PdFloat gSharp)),
+      (PdEvent 3750 0 [PdSymbol "float", PdFloat gSharp]),
+      (PdEvent 3875 0 [PdSymbol "float", PdFloat aSharp]),
+      (PdEvent 4000 0 [PdSymbol "float", PdFloat gSharp]),
       
-      (PdEvent 4333 0 (Just $ PdFloat f)),
+      (PdEvent 4333 0 [PdSymbol "float", PdFloat f]),
       
-      (PdEvent 4666 0 (Just $ PdFloat cSharp)),
+      (PdEvent 4666 0 [PdSymbol "float", PdFloat cSharp]),
       
-      (PdEvent 5000 0 (Just $ PdFloat g)),
+      (PdEvent 5000 0 [PdSymbol "float", PdFloat g]),
       
-      (PdEvent 5650 3 Nothing), -- 0 100
-      (PdEvent 5745 2 Nothing),  -- 0.1 1000
+      (PdEvent 5650 3 [PdSymbol "bang"]), -- 0 100
+      (PdEvent 5745 2 [PdSymbol "bang"]),  -- 0.1 1000
       
-      (PdEvent 5750 0 (Just $ PdFloat gSharp)),
-      (PdEvent 5875 0 (Just $ PdFloat aSharp)),
-      (PdEvent 6000 0 (Just $ PdFloat gSharp)),
+      (PdEvent 5750 0 [PdSymbol "float", PdFloat gSharp]),
+      (PdEvent 5875 0 [PdSymbol "float", PdFloat aSharp]),
+      (PdEvent 6000 0 [PdSymbol "float", PdFloat gSharp]),
       
-      (PdEvent 7000 3 Nothing), -- 0 100
+      (PdEvent 7000 3 [PdSymbol "bang"]), -- 0 100
       
-      (PdEvent 4500 12 Nothing) -- toggle 0
+      (PdEvent 4500 12 [PdSymbol "bang"]) -- toggle 0
    ]
 
 \end{code}
 
-In Pure Data, the sound card is represented by the \texttt{dac~} object. Our
+In Pure Data, the sound card is represented by the \texttt{dac\~} object. Our
 interpreter does nat handle actual audio output natively, but we can extract
 the inlet data from that node from the list of states, and convert it to a
 list of 16-bit integers, which is a format suitable for conversion into
@@ -988,45 +1035,16 @@ genOutput x = concat $ everyOther
 
 \end{code}
 
+These 16-bit integers can then be converted to an actual audio file, using a
+small shell script:
+
 \begin{verbatim}
 #!/bin/sh
-./puredata | tr ',' '\n' | tr -d '[]' | lua -e '
+./puredata_hs | tr ',' '\n' | tr -d '[]' | lua -e '
 for s in io.stdin:lines() do
    local n = tonumber(s)
    io.stdout:write(string.char(n // 256), string.char(n % 256))
-end' > binario
-rm output.wav
-ffmpeg -f u16be -ar 32000 -ac 1 -i binario output.wav
-mplayer output.wav
-
+end' | ffmpeg -f u16be -ar 32000 -ac 1 output.wav
 \end{verbatim}
-
-%\begin{code}
-%
-%--
-%-- messages.pd
-%patch = PdPatch (fromList [
-%            PdMessageBox [PdCommand PdToOutlet [PdTAtom (PdSymbol "list"), PdTAtom (PdFloat 1), PdTAtom (PdFloat 2)], PdCommand PdToOutlet [PdTAtom (PdSymbol "list"), PdTAtom (PdFloat 10), PdTAtom (PdFloat 20)]], 
-%            PdMessageBox [PdCommand PdToOutlet [PdTAtom (PdSymbol "list"), PdTAtom (PdSymbol "foo"), PdTAtom (PdFloat 5), PdTAtom (PdFloat 6)]], 
-%            PdMessageBox [PdCommand PdToOutlet [PdTDollar 1, PdTDollar 1], PdCommand (PdRDollar 1) [PdTDollar 2], PdCommand (PdReceiver "bar") [PdTDollar 2, PdTDollar 1]], 
-%            PdObject     [PdSymbol "print"] 1 0,
-%            PdObject     [PdSymbol "print"] 1 0,
-%            PdObject     [PdSymbol "r", PdSymbol "foo"] 0 1,
-%            PdObject     [PdSymbol "print", PdSymbol "viaFoo"] 1 0,
-%            PdObject     [PdSymbol "r", PdSymbol "bar"] 1 0,
-%            PdObject     [PdSymbol "print", PdSymbol "viaBar"] 1 0
-%         ]) (fromList [
-%            PdConnection (0, 0) (2, 0), -- 1 2, 10 20 -> $1 $1...
-%            PdConnection (1, 0) (2, 0), -- 4 5 6 -> $1 $1...
-%            PdConnection (2, 0) (3, 0), -- $1 $1... -> print
-%            PdConnection (2, 0) (4, 0), -- $1 $1... -> print
-%            PdConnection (5, 0) (6, 0), -- r foo -> print viaFoo
-%            PdConnection (7, 0) (8, 0)  -- r bar -> print viaBar
-%         ]) []
-%
-%main :: IO ()
-%main = print (runSteps 5 patch [(PdEvent 1 0 Nothing), (PdEvent 3 1 Nothing)])
-%
-%\end{code}
 
 \end{document}

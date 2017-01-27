@@ -27,8 +27,6 @@ puredata_hs: puredata.hs
 	rm -f puredata.o puredata.hi
 	ghc -o puredata_hs puredata.hs
 
-hs_lines:
-
 warn:
 	make clean
 	ghc -o puredata -Wall puredata.lhs
