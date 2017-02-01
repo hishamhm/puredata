@@ -6,6 +6,9 @@ import Debug.Trace
 import Data.List (sort)
 import Text.Printf
 import Data.Fixed
+import Data.Binary.Put
+import qualified Data.ByteString.Lazy as ByteString
+import Control.Monad
 
 data PdAtom = PdFloat Double
             | PdSymbol String
@@ -411,7 +414,7 @@ getData state@(PdNodeState inlets _) =
    let
       inlet = index inlets 0
    in
-      map (\(PdFloat f) -> floor (((f + 1) / 2) * 65535)) inlet
+      map (\(PdFloat f) -> floor (f * 65535)) inlet
 
 everyOther :: [a] -> [a]
 everyOther (x:(y:xs)) = x : everyOther xs
@@ -419,6 +422,34 @@ everyOther x = x
 
 genOutput x = concat $ everyOther $ toList $ fmap (\env@(PdEnv _ states _) -> getData $ index states 6) x
 --genOutput x = x
+
+putWave vs =
+   let
+      riff = 0x46464952
+      wave = 0x45564157
+      fmts = 0x20746d66
+      datx = 0x61746164
+      formatHeaderLen = 16
+      fileSize = (44 + (length vs) * 2)
+      bitsPerSample = 16
+      format = 1
+      channels = 1
+      sampleRate = 32000
+   in do
+      putWord32le riff
+      putWord32le (fromIntegral fileSize)
+      putWord32le wave
+      putWord32le fmts
+      putWord32le formatHeaderLen
+      putWord16le format
+      putWord16le channels 
+      putWord32le sampleRate
+      putWord32le (sampleRate * bitsPerSample * (fromIntegral channels) `div` 8)
+      putWord16le (((fromIntegral bitsPerSample) * channels) `div` 8)
+      putWord16le (fromIntegral bitsPerSample)
+      putWord32le datx
+      putWord32le (fromIntegral ((length vs) * 2))
+      mapM_ (putWord16le . fromIntegral) vs
 
 csh = 554.37
 ash = 932.33
@@ -455,7 +486,10 @@ patch = PdPatch 10 (fromList [
          ]) [1, 4, 5, 9, 6]
 
 main :: IO ()
-main = print (genOutput $ run 10000 patch [
+main = 
+   ByteString.putStr $ runPut (putWave output)
+   where
+      output = genOutput $ run 10000 patch [
                         (PdEvent 5 11 Nothing), -- metroToggle 1
                         (PdEvent 10 2 Nothing),  -- 0.1 1000
                         (PdEvent 900 3 Nothing), -- 0 100
@@ -489,8 +523,9 @@ main = print (genOutput $ run 10000 patch [
                         (PdEvent 7000 3 Nothing), -- 0 100
 
                         (PdEvent 4500 12 Nothing) -- metroToggle 0
-             ])
+                        ]
 --}
+
 
 {--
 -- messages.pd

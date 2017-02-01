@@ -13,14 +13,14 @@ puredata: puredata.lhs
 	rm -f puredata.o puredata.hi
 	ghc -o puredata puredata.lhs
 
-lhs_lines: puredata
-	./puredata | tr ',' '\n' | tr -d '[]' > lhs_lines
+lhs.wav: puredata
+	./puredata > lhs.wav
 
-hs_lines: puredata_hs
-	./puredata_hs | tr ',' '\n' | tr -d '[]' > hs_lines
+hs.wav: puredata_hs
+	./puredata_hs > hs.wav
 
-diff_ok: hs_lines lhs_lines
-	diff hs_lines lhs_lines > diff_ok
+diff_ok: hs.wav lhs.wav
+	diff hs.wav lhs.wav > diff_ok
 	[ `stat -c '%s' diff_ok` = 0 ]
 
 puredata_hs: puredata.hs

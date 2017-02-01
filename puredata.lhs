@@ -1,7 +1,20 @@
 \documentclass[a4paper]{article}
 \setlength{\parskip}{\baselineskip}
 \usepackage[margin=3cm]{geometry}
+\usepackage{dsfont}
+\usepackage{amsmath}
+\usepackage{graphicx}
 %include lhs2TeX.fmt
+%format nidx = "i_{N}"
+%format val0 = "val_0"
+%format val1 = "val_1"
+%format inlet0 = "inlet_0"
+%format inlet1 = "inlet_1"
+%format currEvents = "events_{curr}"
+%format nextEvents = "events_{next}"
+%format oldAtoms = "atoms_{old}"
+%format newAtoms = "atoms_{new}"
+%format (PdConnection a b) = "(" a "\rhd " b ")"
 \begin{document}
 
 \title{An interpreter modelling the semantics of Pure Data}
@@ -20,15 +33,19 @@ This implementation uses only standard modules included in the Haskell Platform:
 import Data.Sequence (Seq, fromList, index, update, foldlWithIndex)
 import qualified Data.Sequence as Seq (length)
 import Data.Foldable (foldl', toList)
-import Data.List (sort, intercalate)
+import Data.List (sort, intercalate, find)
 import Text.Printf
 import Data.Fixed
+import Data.Binary.Put
+import qualified Data.ByteString.Lazy as ByteString
+import Control.Monad
+import Debug.Trace
 \end{code}
 
 \section{Representation of programs}
 
 A Pure Data program (called a ``patch'') is represented with the
-\emph{PdPatch} data type in our model, which contains a sequence of nodes, a
+|PdPatch| data type in our model, which contains a sequence of nodes, a
 sequence of connections between nodes, and the pre-computed topological sort
 of audio connections (stored as a list of integer indices).
 
@@ -74,7 +91,7 @@ data PdNode  =  PdObject      [PdAtom] Int Int
 Message boxes contain commands written in the textual sub-language of Pure
 Data. Here, we represent commands not as a string, but in parsed form,
 consisting of a receiver and a list of tokens (which may be literal values or
-numbered references to inlet data (written in $\$n$ in the textual language).
+numbered references to inlet data (written \texttt{\$\emph{n}} in the textual language).
 Note that a single message box may contain a number of messages.
 
 \begin{code}
@@ -95,7 +112,7 @@ data PdToken  =  PdTDollar  Int
 \end{code}
 
 Finally, we represent the connections of the graph as a sequence of adjacency
-pairs, where each pair is represented as a \emph{PdConnection} value, itself
+pairs, where each pair is represented as a |PdConnection| value, itself
 composed of two pairs: the node index and outlet index for the source, and the
 node index and inlet index for the destination. Throughout the interpreter, we
 will often use the names $(src, outl)$ and $(dst, inl)$ to refer to those
@@ -186,7 +203,7 @@ of timed events, accumulating a list of states. We are interested in all
 states, not only the final one, because we want to be able to inspect the
 results of the execution over time.
 
-Note that the program itself, \emph{p}, remains unchanged over time. This
+Note that the program itself, |p|, remains unchanged over time. This
 is typical of a language with liveness level 2: the program cannot be modified
 during execution.
 
@@ -203,21 +220,21 @@ runSteps nSteps p events =
          (sort (nextEvents ++ absTime (sSched s') step), s' : states)
          where
             (currEvents, nextEvents) = span (\(PdEvent ts _ _) -> ts == step) events
-            s' = runStep p s currEvents
+            s' = runStep p (s { sSched = [] }) currEvents
 
 \end{code}
 
 The loop above extracts the sublist of relevant events for the current
-timestamp, and hands it over to the main evaluation function, \emph{runStep},
+timestamp, and hands it over to the main evaluation function, |runStep|,
 which, given a patch, the current state, and a list of events, produces
 a new state.
 
 Processing a step may produce new future events to be scheduled. These are
 sorted along with the existing events of the input. Runtime events are
 produced by the interpreter using relative timestamps (where 0 means ``now''),
-so we adjust them to absolute time using auxiliary function \emph{adjTime}.
+so we adjust them to absolute time using auxiliary function |adjTime|.
 
-The function \emph{runStep} processes events and the DSP tree. Following the
+The function |runStep| processes events and the DSP tree. Following the
 specified semantics of Pure Data, this happens in an alternating fashion: all
 pending messages for a given timestamp are handled, and then the entire DSP
 tree is processed.
@@ -237,8 +254,8 @@ runStep p s events =
 \end{code}
 
 In our model, the DSP tree is processed at half the rate of the message-based
-events (hence, \emph{runDspTree} is called at every other run of
-\emph{runStep}). Assuming that a step in our interpreter is 1~ms, this means
+events (hence, |runDspTree| is called at every other run of
+|runStep|). Assuming that a step in our interpreter is 1~ms, this means
 the DSP engine runs once every 2~ms (the default configuration of Pd runs the
 engine every 1.45~ms; with a 64-sample buffer, this amounts to an audio sample
 rate of 44,100~Hz — with this simplification in our interpreter, we get
@@ -276,7 +293,7 @@ runEvent p s event@(PdEvent ts nidx args) =
 
 \end{code}
 
-The \emph{fire} function invokes the appropriate action for a node, producing
+The |fire| function invokes the appropriate action for a node, producing
 a new state.
 
 \begin{code}
@@ -288,7 +305,7 @@ fire :: PdPatch -> PdNode -> [PdAtom] -> (Int, Int) -> PdState -> PdState
 Depending on the type of node, we perform different actions. For message
 boxes, we feed the incoming atoms into the inlet, and then we fold over its
 triggering its commands, like when they are clicked by the user. As we will
-see below in the definition of \emph{runCommand}, this may fire further nodes
+see below in the definition of |runCommand|, this may fire further nodes
 either directly or indirectly.
 
 \begin{code}
@@ -304,12 +321,12 @@ fire p (PdMessageBox cmds) atoms (nidx, inl) s =
 \end{code}
 
 For objects and atom boxes, we hand over the incoming data to the
-\emph{sendMessage} handler function, which implements the various behaviors
-supported by different Pure Data objects. The function \emph{sendMessage}
+|sendMessage| handler function, which implements the various behaviors
+supported by different Pure Data objects. The function |sendMessage|
 returns a tuple with the updated node state, log outputs produced (if any),
 data to be sent via outlets and new events to be scheduled. We update the
 state with this data, adjusting the node index of the returned events to point
-them to that of the current node ($nidx$): a node can only schedule events for
+them to that of the current node (|nidx|): a node can only schedule events for
 itself. Finally, we propagate the data through the outlets, processing them
 from right to left, as mandated by the Pure Data specification.
 
@@ -321,8 +338,8 @@ fire p node atoms (nidx, inl) s =
       (ns', logw', outlets, evs) = sendMessage node atoms inl ns
       s' = s {
          sNss    = update nidx ns' (sNss s),
-         sLog    = (sLog s) ++ logw',
-         sSched  = (sSched s) ++ (map (\e -> e { eNidx = nidx }) evs)
+         sLog    = (sLog s)    ++ logw',
+         sSched  = (sSched s)  ++ (map (\e -> e { eNidx = nidx }) evs)
       }
 
       propagate :: PdState -> ([PdAtom], Int) -> PdState
@@ -349,7 +366,7 @@ forEachInOutlet p srcPair atoms s =
    foldl' handle s (pConns p)
    where
       handle :: PdState -> PdConnection -> PdState
-      handle s (PdConnection from to@(dst, inl))
+      handle s (PdConnection from (to@(dst, inl)))
          | srcPair == from  = fire p (index (pNodes p) dst) atoms to s
          | otherwise        = s
 
@@ -361,8 +378,8 @@ For example, sending \texttt{10 20} to a message box containing \texttt{pitch
 \$2 velocity \$1} connected to an object box \texttt{print} will print to the
 log window the string \texttt{pitch 20 velocity 10}.
 
-In function \emph{runCommand} below, we run a given command \emph{cmd} on a
-node (with index \emph{nidx}) by first obtaining the inlet data currently
+In function |runCommand| below, we run a given command |cmd| on a
+node (with index |nidx|) by first obtaining the inlet data currently
 stored in the node state. Then we perform $\$$-expansion on the command's
 tokens. Then, based on the receiver of the message, we route it through the
 graph (forwarding it to every outlet, in a classic dataflow fashion) or
@@ -455,10 +472,10 @@ The processing of audio nodes is very different from that of message nodes.
 Before execution, the audio nodes are topologically sorted, producing an
 order according to which they are evaluated on each DSP update. For simplicity,
 we do not compute this order at the beginning of execution, and merely assume
-it is given as an input (in the \emph{dspSort} field of \emph{p}).
+it is given as an input (in the |dspSort| field of |p|).
 
 As the list of nodes is traversed, each object is triggered (applying the
-\emph{performDsp} function) and then the new computed value of its audio
+|performDsp| function) and then the new computed value of its audio
 buffer is propagated to the inlets of the nodes to which they are connected. 
 
 \begin{code}
@@ -474,14 +491,14 @@ runDspTree p s =
          let
             obj = index (pNodes p) nidx
             ns@(PdNodeState ins mem) = index nss nidx
-            (outDsp, mem') = performDsp obj ns
+            (outputs, mem') = performDsp obj ns
             nss'' = update nidx (PdNodeState ins mem') nss
          in
-            foldl' (propagate outDsp) nss'' (pConns p)
+            foldl' (propagate outputs) nss'' (pConns p)
             where
                propagate :: [[PdAtom]] -> (Seq PdNodeState) -> PdConnection -> (Seq PdNodeState)
-               propagate outDsp nss (PdConnection (src, outl) (dst, inl))
-                  | src == nidx  = addToInlet (dst, inl) (outDsp !! outl) nss
+               propagate outputs nss (PdConnection (src, outl) (dst, inl))
+                  | src == nidx  = addToInlet (dst, inl) (outputs !! outl) nss
                   | otherwise    = nss
 
 \end{code}
@@ -495,7 +512,7 @@ need the inlet buffers to be filled with zeros.
 
 zeroDspInlets :: (Seq PdNodeState) -> [Int] -> (Seq PdNodeState)
 zeroDspInlets nss dspSort =
-   fromList $ clearNss 0 (toList nss) (sort dspSort)
+   fromList $ clearNodes 0 (toList nss) (sort dspSort)
       where
          zeroInlets :: Int -> (Seq [PdAtom])
          zeroInlets n = fromList $ replicate n (replicate 64 (PdFloat 0.0))
@@ -504,12 +521,12 @@ zeroDspInlets nss dspSort =
          zeroState (PdNodeState ins mem) =
             PdNodeState (zeroInlets (Seq.length ins)) mem
 
-         clearNss :: Int -> [PdNodeState] -> [Int] -> [PdNodeState]
-         clearNss i (st:sts) indices@(nidx:idxs)
-            | i == nidx  = zeroState st  : clearNss (i+1) sts idxs
-            | otherwise  = st            : clearNss (i+1) sts indices
-         clearNss i  nss  []  = nss
-         clearNss i  []   _   = []
+         clearNodes :: Int -> [PdNodeState] -> [Int] -> [PdNodeState]
+         clearNodes nidx (st:sts) indices@(i:is)
+            | nidx == i  = zeroState st  : clearNodes (nidx+1) sts is
+            | otherwise  = st            : clearNodes (nidx+1) sts indices
+         clearNodes nidx  nss  []  = nss
+         clearNodes nidx  []   _   = []
 
 \end{code}
 
@@ -534,7 +551,7 @@ addToInlet (dst, inl) atoms nss = update dst ns' nss
 
 \end{code}
 
-In Section~\ref{dsps} we will present \emph{performDsp}, which implements the
+In Section~\ref{dsps} we will present |performDsp|, which implements the
 various DSP objects supported by this interpreter.
 
 \subsection{Initial state}
@@ -558,7 +575,7 @@ initialState (PdPatch nodes _ _) = PdState 0 (fmap emptyNode nodes) [] []
 
 \end{code}
 
-\section{Language constructs}
+\section{Operations}
 
 The graphical language of Pure Data is graph-based and contains only nodes and
 edges. The contents of nodes (object boxes, message boxes and atom boxes) are
@@ -566,8 +583,8 @@ textual. Like there are two kinds of edges (message and audio), there are also
 two kinds of objects. Audio-handling objects are identified by a \texttt{\~}
 suffix in their names (the Pure Data documentation calls them ``tilde
 objects''. In our interpreter, plain objects are implemented in the
-\emph{sendMessage} function (Section~\ref{msgs}) and tilde objects are
-implemented in the \emph{performDsp} function (Section~\ref{dsps}).
+|sendMessage| function (Section~\ref{msgs}) and tilde objects are
+implemented in the |performDsp| function (Section~\ref{dsps}).
 
 For printing to the log, we present a simple auxiliary function that adds to
 the output log of the state value.
@@ -583,7 +600,7 @@ printOut atoms s =
 \subsection{Plain objects}
 \label{msgs}
 
-The implementation of all non-audio nodes is done in the \emph{sendMessage}
+The implementation of all non-audio nodes is done in the |sendMessage|
 function, which pattern-matches on the structure of the node (which includes
 the parsed representation of its textual definition). 
 
@@ -594,9 +611,9 @@ sendMessage ::  PdNode -> [PdAtom] -> Int -> PdNodeState
 
 \end{code}
 
-Unlike the \emph{runCommand} function used in the firing of message boxes,
+Unlike the |runCommand| function used in the firing of message boxes,
 which causes global effects to the graph evaluation (via indirect connections)
-and therefore needs access to the whole state, \emph{sendMessage} accesses
+and therefore needs access to the whole state, |sendMessage| accesses
 only the node's private state, producing a triple containing the new private
 node state, any text produced for the output log, a list of messages to
 be sent via the node's outlets and any new events to be scheduled.
@@ -624,32 +641,30 @@ sendMessage (PdObject (PdSymbol "print" : xs) _ _) atoms 0 ns =
 
 \end{code}
 
-\subsubsection{\texttt{float}}
+\subsubsection{\texttt{float} and \texttt{list}}
 
 In Pure Data, the first inlet of a node is the ``hot'' inlet; when data is
 received through it, the action of the node is performed. When data arrives in
 ``cold'' inlets, it stays queued until the ``hot'' inlet causes the object to
 be evaluated.
 
-The \texttt{float} object has two inlets. When given a number through its
-first inlet, it stores it in its internal memory and outputs the value through
-the outlet. When given a number through its second inlet, it only stores the
-value. When given a unit event (called \texttt{bang} in Pure Data), it outputs
-the most currently received number (or the one given in its creation argument,
-or zero as a fallback).
+The \texttt{float} and \texttt{list} objects store and forward data of their
+respective types. They have two inlets for accepting new data. When given data
+through its first inlet, the object stores it in its internal memory and
+outputs the value through the outlet. When given data through its second
+inlet, it only stores the value. When given a unit event (called \texttt{bang}
+in Pure Data), it outputs the most currently received value (or the one given
+in its creation argument, or zero as a fallback). Their implementation of
+|dataObject| is given below in Section~\ref{dataObject}, after we are done
+with all cases of |sendMessage|.
 
 \begin{code}
 
-sendMessage (PdObject [PdSymbol "float"] inl _) (PdSymbol "float" : fl) 0 _ =
-   (PdNodeState (emptyInlets inl) fl, [], [PdSymbol "float" : fl], [])
+sendMessage cmd@(PdObject (PdSymbol "float" : xs) inl _) atoms 0 ns =
+   dataObject cmd atoms ns
 
-sendMessage  (PdObject (PdSymbol "float" : xs) inl _) [PdSymbol "bang"] 0 
-             (PdNodeState ins mem) =
-   let
-      inlet1 = index ins 1
-      mem' = [head (inlet1 ++ mem ++ xs ++ [PdFloat 0])]
-   in
-      (PdNodeState (emptyInlets inl) mem', [], [PdSymbol "float" : mem'], [])
+sendMessage cmd@(PdObject (PdSymbol "list" : xs) inl _) atoms 0 ns =
+   dataObject cmd atoms ns
 
 \end{code}
 
@@ -745,7 +760,7 @@ Some audio objects in Pure Data also accept messages. The \texttt{osc\~} object
 implements a sinewave oscillator. Sending a float to it, we configure its
 frequency, which is stored in the node's internal memory. Note that the actual
 oscillator is not implemented here, but in the DSP handler for this object
-type in function \emph{performDsp}, in Section~\ref{oscdsp}.
+type in function |performDsp|, in Section~\ref{oscdsp}.
 
 \begin{code}
 
@@ -811,10 +826,34 @@ sendMessage node atoms inl (PdNodeState ins mem) =
 
 \end{code}
 
+\subsubsection{Implementation of |dataObject|}
+\label{dataObject}
+
+This is the shared code for the handlers of |float| and |list| objects.
+It handles receiving a \texttt{bang} and producing the correct value
+from either the cold inlet, memory, creation argument or a default,
+and handles forwarding a data of the correct type that was received
+through the hot inlet.
+
+\begin{code}
+
+dataObject (PdObject (PdSymbol a : xs) inl _) [PdSymbol "bang"] 
+           (PdNodeState ins mem) =
+   let
+      inlet1 = index ins 1
+      Just mem' = find (/= []) [inlet1, mem, xs, [PdFloat 0]]
+   in
+      (PdNodeState (emptyInlets inl) mem', [], [PdSymbol a : mem'], [])
+
+dataObject (PdObject (PdSymbol a : xs) inl _) (PdSymbol b : fl) _ | a == b =
+   (PdNodeState (emptyInlets inl) fl, [], [PdSymbol a : fl], [])
+
+\end{code}
+
 \subsection{Audio-handling objects}
 \label{dsps}
 
-Similarly to \emph{sendMessage} in Section~\ref{msgs}, we define a single
+Similarly to |sendMessage| in Section~\ref{msgs}, we define a single
 function that performs the operations for all audio-processing objects:
 
 \begin{code}
@@ -823,7 +862,7 @@ performDsp :: PdNode -> PdNodeState -> ([[PdAtom]], [PdAtom])
 
 \end{code}
 
-The \emph{performDsp} function takes the object, its node state and
+The |performDsp| function takes the object, its node state and
 outputs the audio buffer to be sent at the node's outlets, and the
 updated internal data for the node.
 
@@ -834,11 +873,11 @@ make a realistic audio demonstration.
 \label{oscdsp}
 
 This is the sinewave oscillator. It holds two values in its internal memory,
-\emph{delta} and \emph{position}, through which a wave describing a sine
+|delta| and |position|, through which a wave describing a sine
 function is incrementally computed.
 
 We handle two cases here: when the internal memory is empty, the parameters
-are initialized according to the \emph{freq} creation argument; when the 
+are initialized according to the |freq| creation argument; when the 
 memory is initialized, we produce the new buffer calculating
 64 new values, determine the next position to start the wave in the next
 iteration, store this value in the internal memory, and output the buffer
@@ -868,9 +907,9 @@ performDsp  (PdObject [PdSymbol "osc~", _] _ _)
 As described in Section~\ref{linemsg}, the \texttt{line\~} object implements a
 linear ramp over time. As in \texttt{osc\~} we handle two cases: when the internal
 memory of the object is empty, in which case we initialize it; and when it is
-initialized with \emph{current}, \emph{target} and \emph{delta} values. The
-function varies linearly over time from \emph{current} to \emph{target}, after
-which, it stays constant at \emph{target}.
+initialized with |current|, |target| and |delta| values. The
+function varies linearly over time from |current| to |target|, after
+which, it stays constant at |target|.
 
 \begin{code}
 
@@ -906,7 +945,7 @@ performDsp (PdObject [PdSymbol "*~"] _ _) (PdNodeState ins []) =
 
 \subsubsection{A default handler}
 
-Finally, this is a default handler for \emph{performDsp} that merely produces
+Finally, this is a default handler for |performDsp| that merely produces
 a silent audio buffer.
 
 \begin{code}
@@ -933,35 +972,55 @@ f       = 698.46
 
 \end{code}
 
-Then, we construct the patch:
+Then, we construct the patch that corresponds to the following graph:
+
+\begin{center}
+%\includegraphics[width=0.75\columnwidth]{puredata_example}
+\par\end{center}
+
 
 \begin{code}
 
 example = PdPatch (fromList [
-            PdAtomBox     (PdFloat 0),
-            PdObject      [PdSymbol "osc~", PdFloat gSharp] 2 1,
-            PdMessageBox  [PdCommand PdToOutlet (map (PdTAtom . PdFloat) [0.5, 1000])],
-            PdMessageBox  [PdCommand PdToOutlet (map (PdTAtom . PdFloat) [0, 100])],
-            PdObject      [PdSymbol "line~"] 2 1,
-            PdObject      [PdSymbol "*~"] 2 1,
-            PdObject      [PdSymbol "dac~"] 1 0,
-            PdObject      [PdSymbol "receive", PdSymbol "toggle"] 0 1,
-            PdObject      [PdSymbol "metro", PdFloat 500] 1 1,
-            PdObject      [PdSymbol "tabwrite~", PdSymbol "array99"] 1 0,
-            PdObject      [PdSymbol "array99"] 0 0,
-            PdMessageBox  [PdCommand (PdReceiver "toggle") [PdTAtom (PdFloat 1.0)]],
-            PdMessageBox  [PdCommand (PdReceiver "toggle") [PdTAtom (PdFloat 0.0)]]
-         ]) (fromList [
-            PdConnection (0, 0) (1, 0),  --  \texttt{0}        $\rightarrow$  \texttt{osc\~}
-            PdConnection (1, 0) (5, 0),  --  \texttt{osc\~}    $\rightarrow$  \texttt{*\~}
-            PdConnection (1, 0) (9, 0),  --  \texttt{osc\~}    $\rightarrow$  \texttt{tabwrite\~}
-            PdConnection (7, 0) (8, 0),  --  \texttt{receive}  $\rightarrow$  \texttt{metro}
-            PdConnection (8, 0) (9, 0),  --  \texttt{metro}    $\rightarrow$  \texttt{tabwrite\~}
-            PdConnection (2, 0) (4, 0),  --  \texttt{0.1 100}  $\rightarrow$  \texttt{line\~}
-            PdConnection (3, 0) (4, 0),  --  \texttt{0 100}    $\rightarrow$  \texttt{line\~}
-            PdConnection (4, 0) (5, 1),  --  \texttt{line\~}   $\rightarrow$  \texttt{*\~}
-            PdConnection (5, 0) (6, 0)   --  \texttt{line\~}   $\rightarrow$  \texttt{dac\~}
-         ]) [1, 4, 5, 9, 6]
+            PdAtomBox     (PdFloat 0), -- 0
+            PdObject      [PdSymbol "osc~", PdFloat gSharp] 2 1, -- 1
+            PdMessageBox  [PdCommand PdToOutlet (map (PdTAtom . PdFloat) [0.5, 1000])], -- 2
+            PdMessageBox  [PdCommand PdToOutlet (map (PdTAtom . PdFloat) [0, 100])], -- 3
+            PdObject      [PdSymbol "line~"] 2 1, -- 4
+            PdObject      [PdSymbol "*~"] 2 1, -- 5
+            PdObject      [PdSymbol "dac~"] 1 0, -- 6
+
+            PdObject      [PdSymbol "receive", PdSymbol "MyMetro"] 0 1, -- 7
+            PdObject      [PdSymbol "metro", PdFloat 500] 2 1, -- 8
+            PdObject      [PdSymbol "delay", PdFloat 5] 2 1, -- 9
+            PdObject      [PdSymbol "list", PdFloat 0.5, PdFloat 0.1] 2 1, -- 10
+            PdObject      [PdSymbol "list", PdFloat 0, PdFloat 500] 2 1, -- 11
+            PdObject      [PdSymbol "line~"] 1 1, -- 12
+            PdObject      [PdSymbol "osc~", PdFloat (gSharp / 2)] 1 1, -- 13
+            PdObject      [PdSymbol "*~"] 2 1, -- 14
+
+            PdMessageBox  [PdCommand (PdReceiver "MyMetro") [PdTAtom (PdSymbol "bang")]], -- 15
+            PdMessageBox  [PdCommand (PdReceiver "MyMetro") [PdTAtom (PdSymbol "stop")]]] -- 16
+            
+         ) (fromList [
+            PdConnection (0, 0) (1, 0),
+            PdConnection (1, 0) (5, 0),
+            PdConnection (2, 0) (4, 0),
+            PdConnection (3, 0) (4, 0),
+            PdConnection (4, 0) (5, 1),
+            PdConnection (5, 0) (6, 0),
+
+            PdConnection (7, 0) (8, 0),
+            PdConnection (8, 0) (9, 0),
+            PdConnection (8, 0) (10, 0),
+            PdConnection (9, 0) (11, 0),
+            PdConnection (10, 0) (12, 0),
+            PdConnection (11, 0) (12, 0),
+            PdConnection (12, 0) (14, 0),
+            PdConnection (13, 0) (14, 1),
+            PdConnection (14, 0) (6, 0)]
+
+            ) [1, 4, 5, 12, 13, 14, 6]
 
 \end{code}
 
@@ -971,58 +1030,56 @@ This is the sequence of input events that corresponds to playing the tune:
 
 main :: IO ()
 main =
-   print 
-   $ genOutput
-   $ runSteps 10000 example [
-      (PdEvent 5 11 [PdSymbol "bang"]), -- toggle 1
-      (PdEvent 10 2 [PdSymbol "bang"]),  -- 0.1 1000
-      (PdEvent 900 3 [PdSymbol "bang"]), -- 0 100
-      (PdEvent 1001 0 [PdSymbol "float", PdFloat cSharp]),
-      (PdEvent 1002 2 [PdSymbol "bang"]),  -- 0.1 1000
-      
+   ByteString.putStr $ runPut (putWav output)
+   where
+   output = genOutput $ runSteps 10000 example [
+      (PdEvent 1000 15 [PdSymbol "bang"]), -- MyMetro bang
+      (PdEvent 1010 2 [PdSymbol "bang"]),  -- 0.1 1000
       (PdEvent 1900 3 [PdSymbol "bang"]), -- 0 100
-      (PdEvent 2001 0 [PdSymbol "float", PdFloat g]),
+      (PdEvent 2001 0 [PdSymbol "float", PdFloat cSharp]),
       (PdEvent 2002 2 [PdSymbol "bang"]),  -- 0.1 1000
       
-      (PdEvent 3660 3 [PdSymbol "bang"]), -- 0 100
-      (PdEvent 3749 2 [PdSymbol "bang"]),  -- 0.1 1000
+      (PdEvent 2900 3 [PdSymbol "bang"]), -- 0 100
+      (PdEvent 3001 0 [PdSymbol "float", PdFloat g]),
+      (PdEvent 3002 2 [PdSymbol "bang"]),  -- 0.1 1000
       
-      (PdEvent 3750 0 [PdSymbol "float", PdFloat gSharp]),
-      (PdEvent 3875 0 [PdSymbol "float", PdFloat aSharp]),
-      (PdEvent 4000 0 [PdSymbol "float", PdFloat gSharp]),
+      (PdEvent 4660 3 [PdSymbol "bang"]), -- 0 100
+      (PdEvent 4749 2 [PdSymbol "bang"]),  -- 0.1 1000
       
-      (PdEvent 4333 0 [PdSymbol "float", PdFloat f]),
+      (PdEvent 4750 0 [PdSymbol "float", PdFloat gSharp]),
+      (PdEvent 4875 0 [PdSymbol "float", PdFloat aSharp]),
+      (PdEvent 5000 0 [PdSymbol "float", PdFloat gSharp]),
       
-      (PdEvent 4666 0 [PdSymbol "float", PdFloat cSharp]),
+      (PdEvent 5333 0 [PdSymbol "float", PdFloat f]),
       
-      (PdEvent 5000 0 [PdSymbol "float", PdFloat g]),
+      (PdEvent 5666 0 [PdSymbol "float", PdFloat cSharp]),
       
-      (PdEvent 5650 3 [PdSymbol "bang"]), -- 0 100
-      (PdEvent 5745 2 [PdSymbol "bang"]),  -- 0.1 1000
+      (PdEvent 6000 0 [PdSymbol "float", PdFloat g]),
       
-      (PdEvent 5750 0 [PdSymbol "float", PdFloat gSharp]),
-      (PdEvent 5875 0 [PdSymbol "float", PdFloat aSharp]),
-      (PdEvent 6000 0 [PdSymbol "float", PdFloat gSharp]),
+      (PdEvent 6650 3 [PdSymbol "bang"]), -- 0 100
+      (PdEvent 6745 2 [PdSymbol "bang"]),  -- 0.1 1000
       
-      (PdEvent 7000 3 [PdSymbol "bang"]), -- 0 100
+      (PdEvent 6750 0 [PdSymbol "float", PdFloat gSharp]),
+      (PdEvent 6875 0 [PdSymbol "float", PdFloat aSharp]),
+      (PdEvent 7000 0 [PdSymbol "float", PdFloat gSharp]),
+
+      (PdEvent 7000 16 [PdSymbol "bang"]), -- MyMetro stop
       
-      (PdEvent 4500 12 [PdSymbol "bang"]) -- toggle 0
-   ]
+      (PdEvent 8000 3 [PdSymbol "bang"])] -- 0 100
 
 \end{code}
 
 In Pure Data, the sound card is represented by the \texttt{dac\~} object. Our
 interpreter does nat handle actual audio output natively, but we can extract
-the inlet data from that node from the list of states, and convert it to a
-list of 16-bit integers, which is a format suitable for conversion into
-audio formats.
+the inlet data from that node from the list of states, and convert it to an
+audio \texttt{wav} file format, that is then sent to standard output.
 
 \begin{code}
 
 convertData :: PdNodeState -> [Integer]
 convertData (PdNodeState ins _) =
    let inlet = index ins 0
-   in map (\(PdFloat f) -> floor (((f + 1) / 2) * 65535)) inlet
+   in map (\(PdFloat f) -> floor (f * 32768)) inlet
 
 everyOther :: [a] -> [a]
 everyOther (x:(y:xs)) = x : everyOther xs
@@ -1032,18 +1089,34 @@ genOutput x = concat $ everyOther
                      $ toList 
                      $ fmap (\(PdState _ nss _ _) -> convertData $ index nss 6) x
 
+putWav vs =
+   let
+      riff  = 0x46464952
+      wave  = 0x45564157
+      fmts  = 0x20746d66
+      datx  = 0x61746164
+      formatHeaderLen = 16
+      fileSize = (44 + (length vs) * 2)
+      bitsPerSample = 16
+      format = 1
+      channels = 1
+      sampleRate = 32000
+   in do
+      putWord32le riff
+      putWord32le (fromIntegral fileSize)
+      putWord32le wave
+      putWord32le fmts
+      putWord32le formatHeaderLen
+      putWord16le format
+      putWord16le channels
+      putWord32le sampleRate
+      putWord32le (sampleRate * bitsPerSample * (fromIntegral channels) `div` 8)
+      putWord16le (((fromIntegral bitsPerSample) * channels) `div` 8)
+      putWord16le (fromIntegral bitsPerSample)
+      putWord32le datx
+      putWord32le (fromIntegral ((length vs) * 2))
+      mapM_ (putWord16le . fromIntegral) vs
+
 \end{code}
-
-These 16-bit integers can then be converted to an actual audio file, using a
-small shell script:
-
-\begin{verbatim}
-#!/bin/sh
-./puredata_hs | tr ',' '\n' | tr -d '[]' | lua -e '
-for s in io.stdin:lines() do
-   local n = tonumber(s)
-   io.stdout:write(string.char(n // 256), string.char(n % 256))
-end' | ffmpeg -f u16be -ar 32000 -ac 1 output.wav
-\end{verbatim}
 
 \end{document}
