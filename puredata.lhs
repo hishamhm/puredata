@@ -999,8 +999,9 @@ example = PdPatch (fromList [
             PdObject      [PdSymbol "osc~", PdFloat (gSharp / 2)] 1 1, -- 13
             PdObject      [PdSymbol "*~"] 2 1, -- 14
 
-            PdMessageBox  [PdCommand (PdReceiver "MyMetro") [PdTAtom (PdSymbol "bang")]], -- 15
-            PdMessageBox  [PdCommand (PdReceiver "MyMetro") [PdTAtom (PdSymbol "stop")]]] -- 16
+            PdMessageBox  [PdCommand PdToOutlet [PdTAtom (PdSymbol "list"), PdTAtom (PdSymbol "bang")]], -- 15
+            PdMessageBox  [PdCommand PdToOutlet [PdTAtom (PdSymbol "list"), PdTAtom (PdSymbol "stop")]], -- 16
+            PdMessageBox  [PdCommand (PdReceiver "MyMetro") [PdTDollar 1]]] -- 17
             
          ) (fromList [
             PdConnection (0, 0) (1, 0),
@@ -1018,7 +1019,10 @@ example = PdPatch (fromList [
             PdConnection (11, 0) (12, 0),
             PdConnection (12, 0) (14, 0),
             PdConnection (13, 0) (14, 1),
-            PdConnection (14, 0) (6, 0)]
+            PdConnection (14, 0) (6, 0),
+
+            PdConnection (15, 0) (17, 0),
+            PdConnection (16, 0) (17, 0)]
 
             ) [1, 4, 5, 12, 13, 14, 6]
 
