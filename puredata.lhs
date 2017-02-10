@@ -198,13 +198,13 @@ which are equivalent to entering numbers).
 \subsection{Main loop}
 
 The execution of the interpreter, therefore, is a loop of evaluation steps.
-The main driver function takes a number of steps, the program to run, a list
+The main driver function takes a number of steps, the patch to run, a list
 of timed events, accumulating a list of states. We are interested in all
 states, not only the final one, because we want to be able to inspect the
 results of the execution over time.
 
-Note that the program itself, |p|, remains unchanged over time. This
-is typical of a language with liveness level 2: the program cannot be modified
+Note that the patch itself, |p|, remains unchanged over time. This
+is typical of a language with liveness level 2: the patch cannot be modified
 during execution.
 
 \begin{code}
