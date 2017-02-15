@@ -1,37 +1,37 @@
 
 .PHONY: all test_consistency_hs_lhs
 
-all: diff_ok puredata.pdf
+all: diff_ok PdInterpreter.pdf
 
-puredata.pdf: puredata.tex
-	pdflatex puredata.tex
+PdInterpreter.pdf: PdInterpreter.tex
+	pdflatex PdInterpreter.tex
 
-puredata.tex: puredata.lhs
-	~/.cabal/bin/lhs2TeX puredata.lhs > puredata.tex
+PdInterpreter.tex: PdInterpreter.lhs
+	~/.cabal/bin/lhs2TeX PdInterpreter.lhs > PdInterpreter.tex
 
-puredata: puredata.lhs
-	rm -f puredata.o puredata.hi
-	ghc -o puredata puredata.lhs
+PdInterpreter: PdInterpreter.lhs
+	rm -f PdInterpreter.o PdInterpreter.hi
+	ghc -o PdInterpreter PdInterpreter.lhs
 
-lhs.wav: puredata
-	./puredata > lhs.wav
+lhs.wav: PdInterpreter
+	./PdInterpreter > lhs.wav
 
-hs.wav: puredata_hs
-	./puredata_hs > hs.wav
+hs.wav: PdInterpreter_hs
+	./PdInterpreter_hs > hs.wav
 
 diff_ok: hs.wav lhs.wav
 	diff hs.wav lhs.wav > diff_ok
 	[ `stat -c '%s' diff_ok` = 0 ]
 
-puredata_hs: puredata.hs
-	rm -f puredata.o puredata.hi
-	ghc -o puredata_hs puredata.hs
+PdInterpreter_hs: PdInterpreter_hs.hs
+	rm -f PdInterpreter.o PdInterpreter.hi
+	ghc -o PdInterpreter_hs PdInterpreter_hs.hs
 
 warn:
 	make clean
-	ghc -o puredata -Wall puredata.lhs
+	ghc -o PdInterpreter -Wall PdInterpreter.lhs
 
 clean:
-	rm -f puredata puredata.o puredata.hi puredata.tex puredata.pdf
+	rm -f PdInterpreter PdInterpreter.o PdInterpreter.hi PdInterpreter.tex PdInterpreter.pdf
 
 
