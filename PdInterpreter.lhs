@@ -1,6 +1,8 @@
 \documentclass[a4paper]{article}
 \setlength{\parskip}{\baselineskip}
 \usepackage[margin=3cm]{geometry}
+
+%BEGIN LYX PREAMBLE
 \usepackage{dsfont}
 \usepackage{amsmath}
 \usepackage{graphicx}
@@ -15,12 +17,16 @@
 %format oldAtoms = "atoms_{old}"
 %format newAtoms = "atoms_{new}"
 %format (PdConnection a b) = "(" a "\rhd " b ")"
+%END LYX PREAMBLE
+
 \begin{document}
 
 \title{An interpreter modelling the semantics of Pure Data}
 \author{Hisham Muhammad}
 
 \maketitle{}
+
+%BEGIN LYX TEXT
 
 This is an interpreter designed to model the core semantics of Pure Data, a
 programmable music synthesis application, which features a dataflow language
@@ -954,6 +960,8 @@ performDsp obj ns =
    ([toList $ replicate 64 $ PdFloat 0.0], [])
 
 \end{code}
+
+%END LYX TEXT
 
 \section{Demonstration}
 
