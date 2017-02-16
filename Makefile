@@ -20,7 +20,7 @@ hs.wav: PdInterpreter_hs
 	./PdInterpreter_hs > hs.wav
 
 diff_ok: hs.wav lhs.wav
-	diff hs.wav lhs.wav > diff_ok
+	diff works.wav lhs.wav > diff_ok
 	[ `stat -c '%s' diff_ok` = 0 ]
 
 PdInterpreter_hs: PdInterpreter_hs.hs
