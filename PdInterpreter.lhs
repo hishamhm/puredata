@@ -1,12 +1,11 @@
 \documentclass[a4paper]{article}
-\setlength{\parskip}{\baselineskip}
 \usepackage[margin=3cm]{geometry}
 
 %BEGIN LYX PREAMBLE
 \usepackage{dsfont}
 \usepackage{amsmath}
 \usepackage{graphicx}
-%include lhs2TeX.fmt
+%include polycode.fmt
 %format nidx = "i_{N}"
 %format val0 = "val_0"
 %format val1 = "val_1"
@@ -176,23 +175,6 @@ data PdEvent =  PdEvent {
    deriving (Show, Eq, Ord)
 
 \end{code}
-
-%\begin{code}
-%
-%instance Show PdState where
-%   show (PdState ts nss logw) =
-%      "Step: "  ++ show ts
-%                ++ " - Nodes: " 
-%                ++ show (toList nss) 
-%                ++ " - Log: {\n" 
-%                ++ concatMap (\l -> l ++ "\n") logw 
-%                ++ "}\n"
-%
-%instance Show PdNodeState where
-%   show (PdNodeState ins atoms) =
-%      "{" ++ show (toList ins) ++ " | " ++ (show atoms) ++ "}\n"
-%
-%\end{code}
 
 \section{Execution}
 
@@ -603,9 +585,6 @@ printOut atoms s =
 
 \end{code}
 
-\subsection{Plain objects}
-\label{msgs}
-
 The implementation of all non-audio nodes is done in the |sendMessage|
 function, which pattern-matches on the structure of the node (which includes
 the parsed representation of its textual definition). 
@@ -624,15 +603,45 @@ only the node's private state, producing a triple containing the new private
 node state, any text produced for the output log, a list of messages to
 be sent via the node's outlets and any new events to be scheduled.
 
+Similarly to |sendMessage|, we define a single function that performs the
+operations for all audio-processing objects:
+
+\begin{code}
+
+performDsp :: PdNode -> PdNodeState -> ([[PdAtom]], [PdAtom])
+
+\end{code}
+
+The |performDsp| function takes the object, its node state and
+outputs the audio buffer to be sent at the node's outlets, and the
+updated internal data for the node.
+
 We did not implement the full range of objects supported by Pure Data since
 our goal was not to produce a full-fledged computer music application, but
 we included a few representative objects that allow us to demonstrate the
 interpreter and the various behaviors of objects.
 
-\subsubsection{\texttt{print}}
+\subsection{Atom boxes}
+
+When given a float, atom boxes update their internal memory and propagate the
+value. When given a \texttt{bang}, they just propagate the value.
+
+\begin{code}
+
+sendMessage (PdAtomBox _) (PdSymbol "float" : fl) 0 _ =
+   (PdNodeState (fromList []) fl, [], [PdSymbol "float" : fl], [])
+
+sendMessage (PdAtomBox _) [PdSymbol "bang"] 0 ns@(PdNodeState _ mem) =
+   (ns, [], [PdSymbol "float" : mem], [])
+
+
+\end{code}
+
+\subsection{An object with side-effects: \texttt{print}}
 
 The \texttt{print} object accepts data through its inlet and prints it to
-the log console.
+the log console. It demonstrates the use of the log console as a global
+side-effect.
 
 \begin{code}
 
@@ -647,36 +656,14 @@ sendMessage (PdObject (PdSymbol "print" : xs) _ _) atoms 0 ns =
 
 \end{code}
 
-\subsubsection{\texttt{float} and \texttt{list}}
+\subsection{An object with hot and cold inlets: \texttt{+}}
 
 In Pure Data, the first inlet of a node is the ``hot'' inlet; when data is
 received through it, the action of the node is performed. When data arrives in
 ``cold'' inlets, it stays queued until the ``hot'' inlet causes the object to
 be evaluated.
 
-The \texttt{float} and \texttt{list} objects store and forward data of their
-respective types. They have two inlets for accepting new data. When given data
-through its first inlet, the object stores it in its internal memory and
-outputs the value through the outlet. When given data through its second
-inlet, it only stores the value. When given a unit event (called \texttt{bang}
-in Pure Data), it outputs the most currently received value (or the one given
-in its creation argument, or zero as a fallback). Their implementation of
-|dataObject| is given below in Section~\ref{dataObject}, after we are done
-with all cases of |sendMessage|.
-
-\begin{code}
-
-sendMessage cmd@(PdObject (PdSymbol "float" : xs) inl _) atoms 0 ns =
-   dataObject cmd atoms ns
-
-sendMessage cmd@(PdObject (PdSymbol "list" : xs) inl _) atoms 0 ns =
-   dataObject cmd atoms ns
-
-\end{code}
-
-\subsubsection{\texttt{+}}
-
-The \texttt{+} object also demonstrates the behavior of hot and cold inlets. 
+The \texttt{+} object demonstrates the behavior of hot and cold inlets. 
 When a number arrives in the hot inlet, it sums the values in inlets 0 and 1
 and sends it through its outlet. When a \texttt{bang} arrives in the hot outlet,
 the most recently received values in the inlet buffers are used for the sum instead.
@@ -708,7 +695,7 @@ sendMessage  (PdObject [PdSymbol "+", n] _ _) [PdSymbol "bang"] 0
 
 \end{code}
 
-\subsubsection{\texttt{delay}}
+\subsection{Objects producing timed events: @delay@ and @metro@}
 
 The \texttt{delay} object demonstrates how objects generate future events.
 We handle four cases: receiving a \texttt{bang} message schedules a
@@ -725,11 +712,10 @@ sendMessage (PdObject (PdSymbol "delay" : t) inl _) [PdSymbol "tick"] 0 ns =
 
 \end{code}
 
-\subsubsection{\texttt{metro}}
-
-This node expands on the \texttt{delay} functionality, implementing a
-metronome, which sends a series of \texttt{bang} messages at regular time
-intervals. It also has a second inlet which allows updating the interval.
+The \texttt{metro} node, on its turn, expands on the \texttt{delay}
+functionality, implementing a metronome: it sends a series of \texttt{bang}
+messages at regular time intervals. It also has a second inlet which allows
+updating the interval.
 
 We handle four cases: receiving a \texttt{bang} message to start the
 metronome, receiving a \texttt{stop} message to stop it, and receiving the
@@ -760,7 +746,8 @@ sendMessage  (PdObject (PdSymbol "metro" : xs) inl _) [PdSymbol "tick"] 0
 
 \end{code}
 
-\subsubsection{\texttt{osc\~}}
+\subsection{Message handlers for audio objects: @osc~@ and @line~@}
+\label{linemsg}
 
 Some audio objects in Pure Data also accept messages. The \texttt{osc\~} object
 implements a sinewave oscillator. Sending a float to it, we configure its
@@ -775,9 +762,6 @@ sendMessage  (PdObject (PdSymbol "osc~" : _) _ _) [PdSymbol "float", PdFloat fre
    (PdNodeState ins [PdFloat ((2 * pi) / (32000 / freq)), position], [], [], [])
 
 \end{code}
-
-\subsubsection{\texttt{line\~}}
-\label{linemsg}
 
 The \texttt{line\~} object implements a linear function over time. It can be used,
 for example, to implement gradual changes of frequency or amplitude. Its internal
@@ -800,23 +784,7 @@ sendMessage  (PdObject [PdSymbol "line~"] _ _)
 
 \end{code}
 
-\subsubsection{Atom boxes}
-
-When given a float, atom boxes update their internal memory and propagate the
-value. When given a \texttt{bang}, they just propagate the value.
-
-\begin{code}
-
-sendMessage (PdAtomBox _) (PdSymbol "float" : fl) 0 _ =
-   (PdNodeState (fromList []) fl, [], [PdSymbol "float" : fl], [])
-
-sendMessage (PdAtomBox _) [PdSymbol "bang"] 0 ns@(PdNodeState _ mem) =
-   (ns, [], [PdSymbol "float" : mem], [])
-
-
-\end{code}
-
-\subsubsection{Cold inlets}
+\subsection{Cold inlets}
 
 Since cold inlets are passive and only store the incoming data in the inlet
 buffer without executing any node-specific operation, the implementation for
@@ -824,24 +792,31 @@ cold inlets can be shared by all types of node.
 
 \begin{code}
 
-sendMessage node (PdSymbol "float" : fs) inl (PdNodeState ins mem) =
+sendMessage node (PdSymbol "float" : fs) inl (PdNodeState ins mem) | inl > 0 =
    (PdNodeState (update inl fs ins) mem, [], [], [])
 
-sendMessage node atoms inl (PdNodeState ins mem) =
+sendMessage node atoms inl (PdNodeState ins mem) | inl > 0 =
    (PdNodeState (update inl atoms ins) mem, [], [], [])
 
 \end{code}
 
-\subsubsection{Implementation of |dataObject|}
-\label{dataObject}
+\subsection{Data objects: \texttt{float} and \texttt{list}}
 
-This is the shared code for the handlers of |float| and |list| objects.
-It handles receiving a \texttt{bang} and producing the correct value
-from either the cold inlet, memory, creation argument or a default,
-and handles forwarding a data of the correct type that was received
-through the hot inlet.
+The \texttt{float} and \texttt{list} objects store and forward data of their
+respective types. They have two inlets for accepting new data. When given data
+through its first inlet, the object stores it in its internal memory and
+outputs the value through the outlet. When given data through its second
+inlet, it only stores the value. When given a unit event (called \texttt{bang}
+in Pure Data), it outputs the most recently received value (or the one given
+in its creation argument, or zero as a fallback).
 
 \begin{code}
+
+sendMessage cmd@(PdObject (PdSymbol "float" : xs) inl _) atoms 0 ns =
+   dataObject cmd atoms ns
+
+sendMessage cmd@(PdObject (PdSymbol "list" : xs) inl _) atoms 0 ns =
+   dataObject cmd atoms ns
 
 dataObject (PdObject (PdSymbol a : xs) inl _) [PdSymbol "bang"] 
            (PdNodeState ins mem) =
@@ -856,31 +831,16 @@ dataObject (PdObject (PdSymbol a : xs) inl _) (PdSymbol b : fl) _ | a == b =
 
 \end{code}
 
-\subsection{Audio-handling objects}
+\subsection{Audio handling operations: @osc~@, @line~@ and @*~@}
 \label{dsps}
-
-Similarly to |sendMessage| in Section~\ref{msgs}, we define a single
-function that performs the operations for all audio-processing objects:
-
-\begin{code}
-
-performDsp :: PdNode -> PdNodeState -> ([[PdAtom]], [PdAtom])
-
-\end{code}
-
-The |performDsp| function takes the object, its node state and
-outputs the audio buffer to be sent at the node's outlets, and the
-updated internal data for the node.
-
-We implement a small number of objects, that nevertheless will allow us to
-make a realistic audio demonstration.
-
-\subsubsection{\texttt{osc\~}}
 \label{oscdsp}
 
-This is the sinewave oscillator. It holds two values in its internal memory,
-|delta| and |position|, through which a wave describing a sine
-function is incrementally computed.
+Audio handling is performed by function |performDsp|, which implements
+cases for each type of audio object.
+
+Object \texttt{osc\~} is the sinewave oscillator. It holds two values in its
+internal memory, |delta| and |position|, through which a wave describing a
+sine function is incrementally computed.
 
 We handle two cases here: when the internal memory is empty, the parameters
 are initialized according to the |freq| creation argument; when the 
@@ -908,8 +868,6 @@ performDsp  (PdObject [PdSymbol "osc~", _] _ _)
 
 \end{code}
 
-\subsubsection{\texttt{line\~}}
-
 As described in Section~\ref{linemsg}, the \texttt{line\~} object implements a
 linear ramp over time. As in \texttt{osc\~} we handle two cases: when the internal
 memory of the object is empty, in which case we initialize it; and when it is
@@ -933,9 +891,7 @@ performDsp  (PdObject [PdSymbol "line~"] _ _)
 
 \end{code}
 
-\subsubsection{\texttt{*\~}}
-
-This object multiplies the data from inlets 0 and 1. It is used, for example,
+The @*~@ object multiplies the data from inlets 0 and 1. It is used, for example,
 to modify the amplitude of an audio wave.
 
 \begin{code}
@@ -948,8 +904,6 @@ performDsp (PdObject [PdSymbol "*~"] _ _) (PdNodeState ins []) =
       ([output], [])
 
 \end{code}
-
-\subsubsection{A default handler}
 
 Finally, this is a default handler for |performDsp| that merely produces
 a silent audio buffer.
