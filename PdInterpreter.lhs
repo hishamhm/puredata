@@ -25,12 +25,12 @@
 
 \maketitle{}
 
-%BEGIN LYX TEXT
-
 This is an interpreter designed to model the core semantics of Pure Data, a
 programmable music synthesis application, which features a dataflow language
 at its core. The intention here is to describe the evaluation logic of the
 language, so the goal here is clarity, not performance.
+
+%BEGIN LYX TEXT
 
 This implementation uses only standard modules included in the Haskell Platform:
 
