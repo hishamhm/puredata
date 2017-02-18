@@ -86,9 +86,9 @@ each.
 
 \begin{code}
 
-data PdNode  =  PdObject      [PdAtom] Int Int
-             |  PdAtomBox     PdAtom
-             |  PdMessageBox  [PdCommand]
+data PdNode  =  PdObj      [PdAtom] Int Int
+             |  PdAtomBox  PdAtom
+             |  PdMsgBox   [PdCommand]
    deriving Show
 
 \end{code}
@@ -309,8 +309,8 @@ fire p (PdMessageBox cmds) atoms (nidx, inl) s =
 \end{code}
 
 For objects and atom boxes, we hand over the incoming data to the
-|sendMessage| handler function, which implements the various behaviors
-supported by different Pure Data objects. The function |sendMessage|
+|sendMsg| handler function, which implements the various behaviors
+supported by different Pure Data objects. The function |sendMsg|
 returns a tuple with the updated node state, log outputs produced (if any),
 data to be sent via outlets and new events to be scheduled. We update the
 state with this data, adjusting the node index of the returned events to point
@@ -323,7 +323,7 @@ from right to left, as mandated by the Pure Data specification.
 fire p node atoms (nidx, inl) s =
    let
       ns = index (sNss s) nidx
-      (ns', logw', outlets, evs) = sendMessage node atoms inl ns
+      (ns', logw', outlets, evs) = sendMsg node atoms inl ns
       s' = s {
          sNss    = update nidx ns' (sNss s),
          sLog    = (sLog s)    ++ logw',
@@ -387,12 +387,12 @@ runCommand p nidx (PdState ts nss logw evs) cmd =
       s' = PdState ts nss' logw evs
    in
       case recv of
-         PdToOutlet ->
-            forEachInOutlet p (nidx, 0) atoms s'
-         PdReceiver r ->
-            forEachReceiver p r atoms s'
-         PdReceiverErr ->
-            printOut [PdSymbol "$1: symbol needed as message destination"] s'
+      PdToOutlet ->
+         forEachInOutlet p (nidx, 0) atoms s'
+      PdReceiver r ->
+         forEachReceiver p r atoms s'
+      PdReceiverErr ->
+         printOut [PdSymbol "$1: symbol needed as message destination"] s'
 
 \end{code}
 
@@ -414,16 +414,16 @@ dollarExpansion (PdCommand recv tokens) inlData =
       inlAt n = if n < length inlData then inlData !! n else PdFloat 0
       recv' =
          case recv of
-            PdRDollar n ->
-               case inlAt n of
-                  PdSymbol s  -> PdReceiver s
-                  _           -> PdReceiverErr
-            _ -> recv
+         PdRDollar n ->
+            case inlAt n of
+               PdSymbol s  -> PdReceiver s
+               _           -> PdReceiverErr
+         _ -> recv
       atoms' = 
          normalize $ ffor tokens (\token ->
             case token of
-               PdTDollar n   -> inlAt n
-               PdTAtom atom  -> atom
+            PdTDollar n   -> inlAt n
+            PdTAtom atom  -> atom
          )
       normalize atoms@[PdFloat f]       = (PdSymbol "float" : atoms)
       normalize atoms@(PdFloat f : xs)  = (PdSymbol "list" : atoms)
@@ -448,7 +448,7 @@ forEachReceiver p name atoms s =
    foldlWithIndex handle s (pNodes p)
    where
       handle :: PdState -> Int -> PdNode -> PdState
-      handle s dst (PdObject (PdSymbol "receive" : (PdSymbol rname : _)) _ _)
+      handle s dst (PdObj (PdSymbol "receive" : (PdSymbol rname : _)) _ _)
          | name == rname = forEachInOutlet p (dst, 0) atoms s
       handle s _ _ = s
 
@@ -476,18 +476,16 @@ runDspTree p s =
 
       handle :: (Seq PdNodeState) -> Int -> (Seq PdNodeState)
       handle nss nidx =
-         let
+         foldl' (propagate outputs) nss'' (pConns p)
+         where
             obj = index (pNodes p) nidx
             ns@(PdNodeState ins mem) = index nss nidx
             (outputs, mem') = performDsp obj ns
             nss'' = update nidx (PdNodeState ins mem') nss
-         in
-            foldl' (propagate outputs) nss'' (pConns p)
-            where
-               propagate :: [[PdAtom]] -> (Seq PdNodeState) -> PdConnection -> (Seq PdNodeState)
-               propagate outputs nss (PdConnection (src, outl) (dst, inl))
-                  | src == nidx  = addToInlet (dst, inl) (outputs !! outl) nss
-                  | otherwise    = nss
+            propagate :: [[PdAtom]] -> (Seq PdNodeState) -> PdConnection -> (Seq PdNodeState)
+            propagate outputs nss (PdConnection (src, outl) (dst, inl))
+               | src == nidx  = addToInlet (dst, inl) (outputs !! outl) nss
+               | otherwise    = nss
 
 \end{code}
 
@@ -557,9 +555,9 @@ initialState (PdPatch nodes _ _) = PdState 0 (fmap emptyNode nodes) [] []
    where 
    emptyNode node =
       case node of
-         PdAtomBox     atom     -> PdNodeState (emptyInlets 1)    [atom]
-         PdObject      _ inl _  -> PdNodeState (emptyInlets inl)  []
-         PdMessageBox  _        -> PdNodeState (emptyInlets 1)    []
+         PdAtomBox  atom     -> PdNodeState (emptyInlets 1)    [atom]
+         PdObj      _ inl _  -> PdNodeState (emptyInlets inl)  []
+         PdMsgBox   _        -> PdNodeState (emptyInlets 1)    []
 
 \end{code}
 
@@ -571,7 +569,7 @@ textual. Like there are two kinds of edges (message and audio), there are also
 two kinds of objects. Audio-handling objects are identified by a \texttt{\~}
 suffix in their names (the Pure Data documentation calls them ``tilde
 objects''. In our interpreter, plain objects are implemented in the
-|sendMessage| function (Section~\ref{msgs}) and tilde objects are
+|sendMsg| function (Section~\ref{msgs}) and tilde objects are
 implemented in the |performDsp| function (Section~\ref{dsps}).
 
 For printing to the log, we present a simple auxiliary function that adds to
@@ -585,25 +583,25 @@ printOut atoms s =
 
 \end{code}
 
-The implementation of all non-audio nodes is done in the |sendMessage|
+The implementation of all non-audio nodes is done in the |sendMsg|
 function, which pattern-matches on the structure of the node (which includes
 the parsed representation of its textual definition). 
 
 \begin{code}
 
-sendMessage ::  PdNode -> [PdAtom] -> Int -> PdNodeState 
-                -> (PdNodeState, [String], [[PdAtom]], [PdEvent])
+sendMsg ::  PdNode -> [PdAtom] -> Int -> PdNodeState 
+            -> (PdNodeState, [String], [[PdAtom]], [PdEvent])
 
 \end{code}
 
 Unlike the |runCommand| function used in the firing of message boxes,
 which causes global effects to the graph evaluation (via indirect connections)
-and therefore needs access to the whole state, |sendMessage| accesses
+and therefore needs access to the whole state, |sendMsg| accesses
 only the node's private state, producing a triple containing the new private
 node state, any text produced for the output log, a list of messages to
 be sent via the node's outlets and any new events to be scheduled.
 
-Similarly to |sendMessage|, we define a single function that performs the
+Similarly to |sendMsg|, we define a single function that performs the
 operations for all audio-processing objects:
 
 \begin{code}
@@ -628,10 +626,10 @@ value. When given a \texttt{bang}, they just propagate the value.
 
 \begin{code}
 
-sendMessage (PdAtomBox _) (PdSymbol "float" : fl) 0 _ =
+sendMsg (PdAtomBox _) (PdSymbol "float" : fl) 0 _ =
    (PdNodeState (fromList []) fl, [], [PdSymbol "float" : fl], [])
 
-sendMessage (PdAtomBox _) [PdSymbol "bang"] 0 ns@(PdNodeState _ mem) =
+sendMsg (PdAtomBox _) [PdSymbol "bang"] 0 ns@(PdNodeState _ mem) =
    (ns, [], [PdSymbol "float" : mem], [])
 
 
@@ -645,13 +643,13 @@ side-effect.
 
 \begin{code}
 
-sendMessage (PdObject (PdSymbol "print" : xs) _ _) (PdSymbol "float" : fs) 0 ns =
+sendMsg (PdObj (PdSymbol "print" : xs) _ _) (PdSymbol "float" : fs) 0 ns =
    (ns, ["print: " ++ (intercalate " " $ map show (xs ++ fs))], [], [])
 
-sendMessage (PdObject (PdSymbol "print" : xs) _ _) (PdSymbol "list" : ls) 0 ns = 
+sendMsg (PdObj (PdSymbol "print" : xs) _ _) (PdSymbol "list" : ls) 0 ns = 
    (ns, ["print: " ++ (intercalate " " $ map show (xs ++ ls))], [], [])
 
-sendMessage (PdObject (PdSymbol "print" : xs) _ _) atoms 0 ns = 
+sendMsg (PdObj (PdSymbol "print" : xs) _ _) atoms 0 ns = 
    (ns, ["print: " ++ (intercalate " " $ map show atoms)], [], [])
 
 \end{code}
@@ -670,7 +668,7 @@ the most recently received values in the inlet buffers are used for the sum inst
 
 \begin{code}
 
-sendMessage  (PdObject [PdSymbol "+", n] _ _) [PdSymbol "float", fl] 0 
+sendMsg  (PdObj [PdSymbol "+", n] _ _) [PdSymbol "float", fl] 0 
              (PdNodeState ins mem) =
    let
       (PdFloat val0) = fl
@@ -681,7 +679,7 @@ sendMessage  (PdObject [PdSymbol "+", n] _ _) [PdSymbol "float", fl] 0
    in
       (ns', [], [PdSymbol "float" : mem'], [])
 
-sendMessage  (PdObject [PdSymbol "+", n] _ _) [PdSymbol "bang"] 0 
+sendMsg  (PdObj [PdSymbol "+", n] _ _) [PdSymbol "bang"] 0 
              (PdNodeState ins mem) =
    let
       inlet0 = index ins 0
@@ -704,10 +702,10 @@ node's outlets.
 
 \begin{code}
 
-sendMessage (PdObject [PdSymbol "delay", PdFloat time] inl _) [PdSymbol "bang"] 0 ns =
+sendMsg (PdObj [PdSymbol "delay", PdFloat time] inl _) [PdSymbol "bang"] 0 ns =
    (ns, [], [], [PdEvent (floor time) 0 [PdSymbol "tick"]])
 
-sendMessage (PdObject (PdSymbol "delay" : t) inl _) [PdSymbol "tick"] 0 ns =
+sendMsg (PdObj (PdSymbol "delay" : t) inl _) [PdSymbol "tick"] 0 ns =
    (ns, [], [[PdSymbol "bang"]], [])
 
 \end{code}
@@ -723,7 +721,7 @@ internally-scheduled \texttt{tick} when the metronome is either on or off.
 
 \begin{code}
 
-sendMessage  (PdObject (PdSymbol "metro" : xs) inl _) [PdSymbol "bang"] 0 
+sendMsg  (PdObj (PdSymbol "metro" : xs) inl _) [PdSymbol "bang"] 0 
              (PdNodeState ins mem) =
    let
       inlet1 = index ins 1
@@ -732,15 +730,15 @@ sendMessage  (PdObject (PdSymbol "metro" : xs) inl _) [PdSymbol "bang"] 0
    in
       (ns', [], [[PdSymbol "bang"]], [PdEvent (floor time) 0 [PdSymbol "tick"]])
 
-sendMessage  (PdObject (PdSymbol "metro" : xs) inl _) [PdSymbol "stop"] 0 
+sendMsg  (PdObj (PdSymbol "metro" : xs) inl _) [PdSymbol "stop"] 0 
              (PdNodeState ins [PdFloat time, PdSymbol "on"]) =
    (PdNodeState ins [PdFloat time, PdSymbol "off"], [], [], [])
 
-sendMessage  (PdObject (PdSymbol "metro" : xs) inl _) [PdSymbol "tick"] 0 
+sendMsg  (PdObj (PdSymbol "metro" : xs) inl _) [PdSymbol "tick"] 0 
              ns@(PdNodeState ins [PdFloat time, PdSymbol "on"]) =
    (ns, [], [[PdSymbol "bang"]], [PdEvent (floor time) 0 [PdSymbol "tick"]])
 
-sendMessage  (PdObject (PdSymbol "metro" : xs) inl _) [PdSymbol "tick"] 0 
+sendMsg  (PdObj (PdSymbol "metro" : xs) inl _) [PdSymbol "tick"] 0 
              ns@(PdNodeState ins [_, PdSymbol "off"]) =
    (ns, [], [], [])
 
@@ -757,7 +755,7 @@ type in function |performDsp|, in Section~\ref{oscdsp}.
 
 \begin{code}
 
-sendMessage  (PdObject (PdSymbol "osc~" : _) _ _) [PdSymbol "float", PdFloat freq] 0 
+sendMsg  (PdObj (PdSymbol "osc~" : _) _ _) [PdSymbol "float", PdFloat freq] 0 
              (PdNodeState ins [_, position]) =
    (PdNodeState ins [PdFloat ((2 * pi) / (32000 / freq)), position], [], [], [])
 
@@ -771,7 +769,7 @@ from the current value to the new target.
 
 \begin{code}
 
-sendMessage  (PdObject [PdSymbol "line~"] _ _)
+sendMsg  (PdObj [PdSymbol "line~"] _ _)
              [PdSymbol "list", PdFloat amp, PdFloat time] 0 
              (PdNodeState ins mem) =
    let
@@ -792,10 +790,10 @@ cold inlets can be shared by all types of node.
 
 \begin{code}
 
-sendMessage node (PdSymbol "float" : fs) inl (PdNodeState ins mem) | inl > 0 =
+sendMsg node (PdSymbol "float" : fs) inl (PdNodeState ins mem) | inl > 0 =
    (PdNodeState (update inl fs ins) mem, [], [], [])
 
-sendMessage node atoms inl (PdNodeState ins mem) | inl > 0 =
+sendMsg node atoms inl (PdNodeState ins mem) | inl > 0 =
    (PdNodeState (update inl atoms ins) mem, [], [], [])
 
 \end{code}
@@ -812,13 +810,13 @@ in its creation argument, or zero as a fallback).
 
 \begin{code}
 
-sendMessage cmd@(PdObject (PdSymbol "float" : xs) inl _) atoms 0 ns =
+sendMsg cmd@(PdObj (PdSymbol "float" : xs) inl _) atoms 0 ns =
    dataObject cmd atoms ns
 
-sendMessage cmd@(PdObject (PdSymbol "list" : xs) inl _) atoms 0 ns =
+sendMsg cmd@(PdObj (PdSymbol "list" : xs) inl _) atoms 0 ns =
    dataObject cmd atoms ns
 
-dataObject (PdObject (PdSymbol a : xs) inl _) [PdSymbol "bang"] 
+dataObject (PdObj (PdSymbol a : xs) inl _) [PdSymbol "bang"] 
            (PdNodeState ins mem) =
    let
       inlet1 = index ins 1
@@ -826,7 +824,7 @@ dataObject (PdObject (PdSymbol a : xs) inl _) [PdSymbol "bang"]
    in
       (PdNodeState (emptyInlets inl) mem', [], [PdSymbol a : mem'], [])
 
-dataObject (PdObject (PdSymbol a : xs) inl _) (PdSymbol b : fl) _ | a == b =
+dataObject (PdObj (PdSymbol a : xs) inl _) (PdSymbol b : fl) _ | a == b =
    (PdNodeState (emptyInlets inl) fl, [], [PdSymbol a : fl], [])
 
 \end{code}
@@ -851,10 +849,10 @@ through the node's outlet.
 
 \begin{code}
 
-performDsp obj@(PdObject [PdSymbol "osc~", PdFloat freq] _ _) (PdNodeState ins []) =
+performDsp obj@(PdObj [PdSymbol "osc~", PdFloat freq] _ _) (PdNodeState ins []) =
    performDsp obj (PdNodeState ins [PdFloat ((2 * pi) / (32000 / freq)), PdFloat 0])
 
-performDsp  (PdObject [PdSymbol "osc~", _] _ _)
+performDsp  (PdObj [PdSymbol "osc~", _] _ _)
             (PdNodeState ins [PdFloat delta, PdFloat position]) =
    let
       osc :: Double -> Double -> Double -> Double
@@ -877,14 +875,15 @@ which, it stays constant at |target|.
 
 \begin{code}
 
-performDsp obj@(PdObject [PdSymbol "line~"] _ _) (PdNodeState ins []) =
+performDsp obj@(PdObj [PdSymbol "line~"] _ _) (PdNodeState ins []) =
    performDsp obj (PdNodeState ins [PdFloat 0, PdFloat 0, PdFloat 0])
 
-performDsp  (PdObject [PdSymbol "line~"] _ _)
+performDsp  (PdObj [PdSymbol "line~"] _ _)
             (PdNodeState ins [PdFloat current, PdFloat target, PdFloat delta]) =
    let
       limiter = if delta > 0 then min else max
-      output = map PdFloat $ tail $ take 65 $ iterate (\v -> limiter target (v + delta)) current
+      output =  map PdFloat $ tail $ take 65
+                $ iterate (\v -> limiter target (v + delta)) current
       mem' = [last output, PdFloat target, PdFloat delta]
    in
       ([output], mem')
@@ -896,7 +895,7 @@ to modify the amplitude of an audio wave.
 
 \begin{code}
 
-performDsp (PdObject [PdSymbol "*~"] _ _) (PdNodeState ins []) =
+performDsp (PdObj [PdSymbol "*~"] _ _) (PdNodeState ins []) =
    let
       mult (PdFloat a) (PdFloat b) = PdFloat (a * b)
       output = zipWith mult (index ins 0) (index ins 1)
@@ -919,10 +918,13 @@ performDsp obj ns =
 
 \section{Demonstration}
 
-To wrap up the presentation of the interpreter, we present a demonstration of
-its use. We build a simple synthesizer with both frequency and amplitude
-controllable via events, and use it to play a simple tune. First, we define
-a few constants corresponding to the frequency in Hertz of some musical notes:
+%BEGIN LYX DEMO
+
+To wrap up the presentation of the interpreter modeling Pure Data, we present
+a demonstration of its use. We build a simple synthesizer with both frequency
+and amplitude controllable via events, and use it to play a simple tune.
+First, we define a few constants corresponding to the frequency in Hertz of
+some musical notes:
 
 \begin{code}
 
@@ -937,56 +939,46 @@ f       = 698.46
 Then, we construct the patch that corresponds to the following graph:
 
 \begin{center}
-%\includegraphics[width=0.75\columnwidth]{puredata_example}
+\includegraphics[width=0.75\columnwidth]{puredata_example}
 \par\end{center}
-
 
 \begin{code}
 
-example = PdPatch (fromList [
-            PdAtomBox     (PdFloat 0), -- 0
-            PdObject      [PdSymbol "osc~", PdFloat gSharp] 2 1, -- 1
-            PdMessageBox  [PdCommand PdToOutlet (map (PdTAtom . PdFloat) [0.5, 1000])], -- 2
-            PdMessageBox  [PdCommand PdToOutlet (map (PdTAtom . PdFloat) [0, 100])], -- 3
-            PdObject      [PdSymbol "line~"] 2 1, -- 4
-            PdObject      [PdSymbol "*~"] 2 1, -- 5
-            PdObject      [PdSymbol "dac~"] 1 0, -- 6
+example =
+   PdPatch (
+      fromList [
+         PdAtomBox  (PdFloat 0), -- 0
+         PdObj      [PdSymbol "osc~", PdFloat gSharp] 2 1, -- 1
+         PdMsgBox   [PdCommand PdToOutlet (map (PdTAtom . PdFloat) [0.5, 1000])], -- 2
+         PdMsgBox   [PdCommand PdToOutlet (map (PdTAtom . PdFloat) [0, 100])], -- 3
+         PdObj      [PdSymbol "line~"] 2 1, -- 4
+         PdObj      [PdSymbol "*~"] 2 1, -- 5
+         PdObj      [PdSymbol "dac~"] 1 0, -- 6
 
-            PdObject      [PdSymbol "receive", PdSymbol "MyMetro"] 0 1, -- 7
-            PdObject      [PdSymbol "metro", PdFloat 500] 2 1, -- 8
-            PdObject      [PdSymbol "delay", PdFloat 5] 2 1, -- 9
-            PdObject      [PdSymbol "list", PdFloat 0.5, PdFloat 0.1] 2 1, -- 10
-            PdObject      [PdSymbol "list", PdFloat 0, PdFloat 500] 2 1, -- 11
-            PdObject      [PdSymbol "line~"] 1 1, -- 12
-            PdObject      [PdSymbol "osc~", PdFloat (gSharp / 2)] 1 1, -- 13
-            PdObject      [PdSymbol "*~"] 2 1, -- 14
+         PdObj      [PdSymbol "receive", PdSymbol "MyMetro"] 0 1, -- 7
+         PdObj      [PdSymbol "metro", PdFloat 500] 2 1, -- 8
+         PdObj      [PdSymbol "delay", PdFloat 5] 2 1, -- 9
+         PdObj      [PdSymbol "list", PdFloat 0.5, PdFloat 0.1] 2 1, -- 10
+         PdObj      [PdSymbol "list", PdFloat 0, PdFloat 500] 2 1, -- 11
+         PdObj      [PdSymbol "line~"] 1 1, -- 12
+         PdObj      [PdSymbol "osc~", PdFloat (gSharp / 2)] 1 1, -- 13
+         PdObj      [PdSymbol "*~"] 2 1, -- 14
 
-            PdMessageBox  [PdCommand PdToOutlet [PdTAtom (PdSymbol "list"), PdTAtom (PdSymbol "bang")]], -- 15
-            PdMessageBox  [PdCommand PdToOutlet [PdTAtom (PdSymbol "list"), PdTAtom (PdSymbol "stop")]], -- 16
-            PdMessageBox  [PdCommand (PdReceiver "MyMetro") [PdTDollar 1]]] -- 17
-            
-         ) (fromList [
-            PdConnection (0, 0) (1, 0),
-            PdConnection (1, 0) (5, 0),
-            PdConnection (2, 0) (4, 0),
-            PdConnection (3, 0) (4, 0),
-            PdConnection (4, 0) (5, 1),
-            PdConnection (5, 0) (6, 0),
+         PdMsgBox   [PdCommand PdToOutlet
+                          [PdTAtom (PdSymbol "list"), PdTAtom (PdSymbol "bang")]], -- 15
+         PdMsgBox   [PdCommand PdToOutlet
+                          [PdTAtom (PdSymbol "list"), PdTAtom (PdSymbol "stop")]], -- 16
+         PdMsgBox   [PdCommand (PdReceiver "MyMetro") [PdTDollar 1]]] -- 17
+         
+      ) (fromList [
+         PdConnection (0,   0) (1,   0),  PdConnection (1,   0) (5,   0),  PdConnection (2,   0) (4,   0),
+         PdConnection (3,   0) (4,   0),  PdConnection (4,   0) (5,   1),  PdConnection (5,   0) (6,   0),
+         PdConnection (7,   0) (8,   0),  PdConnection (8,   0) (9,   0),  PdConnection (8,   0) (10,  0),
+         PdConnection (9,   0) (11,  0),  PdConnection (10,  0) (12,  0),  PdConnection (11,  0) (12,  0),
+         PdConnection (12,  0) (14,  0),  PdConnection (13,  0) (14,  1),  PdConnection (14,  0) (6,   0),
+         PdConnection (15,  0) (17,  0),  PdConnection (16,  0) (17,  0)]
 
-            PdConnection (7, 0) (8, 0),
-            PdConnection (8, 0) (9, 0),
-            PdConnection (8, 0) (10, 0),
-            PdConnection (9, 0) (11, 0),
-            PdConnection (10, 0) (12, 0),
-            PdConnection (11, 0) (12, 0),
-            PdConnection (12, 0) (14, 0),
-            PdConnection (13, 0) (14, 1),
-            PdConnection (14, 0) (6, 0),
-
-            PdConnection (15, 0) (17, 0),
-            PdConnection (16, 0) (17, 0)]
-
-            ) [1, 4, 5, 12, 13, 14, 6]
+         ) [1, 4, 5, 12, 13, 14, 6]
 
 \end{code}
 
@@ -1084,5 +1076,7 @@ putWav vs =
       mapM_ (putWord16le . fromIntegral) vs
 
 \end{code}
+
+%END LYX DEMO
 
 \end{document}
