@@ -42,13 +42,13 @@ data PdReceiver = PdToOutlet
                 | PdReceiverErr
    deriving Show
 
-data PdCommand = PdCommand PdReceiver [PdToken]
+data PdCmd = PdCmd PdReceiver [PdToken]
    deriving Show
 
               -- creation-arguments, inlets, outlets
 data PdNode = PdObject [PdAtom] [PdInlet] [PdOutlet]
             | PdAtomBox [PdAtom] [PdInlet] [PdOutlet]
-            | PdMessageBox [PdCommand] [PdInlet] [PdOutlet]
+            | PdMessageBox [PdCmd] [PdInlet] [PdOutlet]
             | PdGObject [PdAtom] [PdInlet] [PdOutlet]
    deriving Show
 
@@ -118,8 +118,8 @@ initialState (PdPatch _ nodes conns _) =
                _ ->
                   prev
 
-dollarExpansion :: PdCommand -> [PdAtom] -> (PdReceiver, [PdAtom])
-dollarExpansion cmd@(PdCommand recv tokens) cmdState =
+dollarExpansion :: PdCmd -> [PdAtom] -> (PdReceiver, [PdAtom])
+dollarExpansion cmd@(PdCmd recv tokens) cmdState =
    (recv', atoms')
    where
       recv' =
@@ -341,7 +341,7 @@ run steps patch@(PdPatch _ nodes conns dspSort) events =
       normalizeMessage atoms@(PdFloat f : xs) = (PdSymbol "list"  : atoms)
       normalizeMessage atoms = atoms
 
-      processCommand :: Int -> PdEnv -> PdCommand -> PdEnv
+      processCommand :: Int -> PdEnv -> PdCmd -> PdEnv
       processCommand idx env@(PdEnv step states output) cmd =
          let
             (PdNodeState inlets _) = index states idx
@@ -365,7 +365,7 @@ run steps patch@(PdPatch _ nodes conns dspSort) events =
                PdMessageBox cmds _ _ -> updateInlet idx 0 [] (foldl (processCommand idx) env cmds)
                PdAtomBox _ _ _ ->
                   case arg of
-                     Just atom -> updateInlet idx 0 [atom] (processCommand idx env (PdCommand PdToOutlet [PdTAtom atom]))
+                     Just atom -> updateInlet idx 0 [atom] (processCommand idx env (PdCmd PdToOutlet [PdTAtom atom]))
                      Nothing -> error "Events on atom boxes expect an argument."
                _ -> env
 
@@ -462,8 +462,8 @@ f = 698.46
 patch = PdPatch 10 (fromList [
             PdAtomBox    [PdFloat 0] [PdControlInlet True "bang"] [PdControlOutlet "float"],
             PdObject     [PdSymbol "osc~", PdFloat gsh] [PdControlInlet True "float", PdControlInlet True "float"] [PdSignalOutlet],
-            PdMessageBox [PdCommand PdToOutlet [PdTAtom (PdFloat 0.5), PdTAtom (PdFloat 1000)]] [PdControlInlet True "bang"] [PdControlOutlet "list"],
-            PdMessageBox [PdCommand PdToOutlet [PdTAtom (PdFloat 0), PdTAtom (PdFloat 100)]] [PdControlInlet True "bang"] [PdControlOutlet "list"],
+            PdMessageBox [PdCmd PdToOutlet [PdTAtom (PdFloat 0.5), PdTAtom (PdFloat 1000)]] [PdControlInlet True "bang"] [PdControlOutlet "list"],
+            PdMessageBox [PdCmd PdToOutlet [PdTAtom (PdFloat 0), PdTAtom (PdFloat 100)]] [PdControlInlet True "bang"] [PdControlOutlet "list"],
             PdObject     [PdSymbol "line~"] [PdControlInlet True "list", PdControlInlet False "float"] [PdSignalOutlet],
             PdObject     [PdSymbol "*~"] [PdSignalInlet 0, PdSignalInlet 0] [PdSignalOutlet],
             PdObject     [PdSymbol "dac~"] [PdSignalInlet 0] [],
@@ -471,8 +471,8 @@ patch = PdPatch 10 (fromList [
             PdObject     [PdSymbol "metro", PdFloat 500] [PdControlInlet True "bang"] [PdControlOutlet "bang"],
             PdObject     [PdSymbol "tabwrite~", PdSymbol "array99"] [PdControlInlet True "signal"] [],
             PdGObject    [PdSymbol "array99"] [] [],
-            PdMessageBox [PdCommand (PdReceiver "metroToggle") [PdTAtom (PdFloat 1.0)]] [PdControlInlet True "bang"] [PdControlOutlet "list"],
-            PdMessageBox [PdCommand (PdReceiver "metroToggle") [PdTAtom (PdFloat 0.0)]] [PdControlInlet True "bang"] [PdControlOutlet "list"]
+            PdMessageBox [PdCmd (PdReceiver "metroToggle") [PdTAtom (PdFloat 1.0)]] [PdControlInlet True "bang"] [PdControlOutlet "list"],
+            PdMessageBox [PdCmd (PdReceiver "metroToggle") [PdTAtom (PdFloat 0.0)]] [PdControlInlet True "bang"] [PdControlOutlet "list"]
          ]) (fromList [
             PdConnection (0, 0) (1, 0), -- 0 -> osc~
             PdConnection (1, 0) (5, 0), -- osc~ -> *~
@@ -530,9 +530,9 @@ main =
 {--
 -- messages.pd
 patch = PdPatch 10 (fromList [
-            PdMessageBox [PdCommand PdToOutlet [PdTAtom (PdSymbol "list"), PdTAtom (PdFloat 1), PdTAtom (PdFloat 2)], PdCommand PdToOutlet [PdTAtom (PdSymbol "list"), PdTAtom (PdFloat 10), PdTAtom (PdFloat 20)]] [PdControlInlet True "list"] [], 
-            PdMessageBox [PdCommand PdToOutlet [PdTAtom (PdSymbol "list"), PdTAtom (PdSymbol "foo"), PdTAtom (PdFloat 5), PdTAtom (PdFloat 6)]] [PdControlInlet True "list"] [], 
-            PdMessageBox [PdCommand PdToOutlet [PdTDollar 1, PdTDollar 1], PdCommand (PdRDollar 1) [PdTDollar 2], PdCommand (PdReceiver "bar") [PdTDollar 2, PdTDollar 1]] [PdControlInlet True "list"] [], 
+            PdMessageBox [PdCmd PdToOutlet [PdTAtom (PdSymbol "list"), PdTAtom (PdFloat 1), PdTAtom (PdFloat 2)], PdCmd PdToOutlet [PdTAtom (PdSymbol "list"), PdTAtom (PdFloat 10), PdTAtom (PdFloat 20)]] [PdControlInlet True "list"] [], 
+            PdMessageBox [PdCmd PdToOutlet [PdTAtom (PdSymbol "list"), PdTAtom (PdSymbol "foo"), PdTAtom (PdFloat 5), PdTAtom (PdFloat 6)]] [PdControlInlet True "list"] [], 
+            PdMessageBox [PdCmd PdToOutlet [PdTDollar 1, PdTDollar 1], PdCmd (PdRDollar 1) [PdTDollar 2], PdCmd (PdReceiver "bar") [PdTDollar 2, PdTDollar 1]] [PdControlInlet True "list"] [], 
             PdObject     [PdSymbol "print"] [PdControlInlet True "symbol"] [],
             PdObject     [PdSymbol "print"] [PdControlInlet True "symbol"] [],
             PdObject     [PdSymbol "r", PdSymbol "foo"] [] [PdControlOutlet "bang"],
@@ -555,14 +555,14 @@ main = print (run 30 patch [(PdEvent 1 0 Nothing), (PdEvent 3 1 Nothing)])
 {-- inc.pd
 patch :: PdPatch
 patch = PdPatch 10 (fromList [
-            PdMessageBox [PdCommand PdToOutlet [PdTAtom (PdSymbol "bang")]] [PdControlInlet True "list"] [],
+            PdMessageBox [PdCmd PdToOutlet [PdTAtom (PdSymbol "bang")]] [PdControlInlet True "list"] [],
             PdObject     [PdSymbol "float"] [PdControlInlet True "float", PdControlInlet False "float"] [PdControlOutlet "float"],
             PdObject     [PdSymbol "print"] [PdControlInlet True "list"] [],
             PdObject     [PdSymbol "+", PdFloat 1] [PdControlInlet True "float", PdControlInlet False "float"] [PdControlOutlet "float"],
 
             PdObject     [PdSymbol "print"] [PdControlInlet True "list"] [],
-            PdMessageBox [PdCommand PdToOutlet [PdTAtom (PdSymbol "bang")]] [PdControlInlet True "list"] [],
-            PdMessageBox [PdCommand PdToOutlet [PdTAtom (PdSymbol "float"), PdTAtom (PdFloat 100)]] [PdControlInlet True "list"] []
+            PdMessageBox [PdCmd PdToOutlet [PdTAtom (PdSymbol "bang")]] [PdControlInlet True "list"] [],
+            PdMessageBox [PdCmd PdToOutlet [PdTAtom (PdSymbol "float"), PdTAtom (PdFloat 100)]] [PdControlInlet True "list"] []
 
          ]) (fromList [
             PdConnection (0, 0) (1, 0),

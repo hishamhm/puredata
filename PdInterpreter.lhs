@@ -88,7 +88,7 @@ each.
 
 data PdNode  =  PdObj      [PdAtom] Int Int
              |  PdAtomBox  PdAtom
-             |  PdMsgBox   [PdCommand]
+             |  PdMsgBox   [PdCmd]
    deriving Show
 
 \end{code}
@@ -101,7 +101,7 @@ Note that a single message box may contain a number of messages.
 
 \begin{code}
 
-data PdCommand = PdCommand PdReceiver [PdToken]
+data PdCmd = PdCmd PdReceiver [PdToken]
    deriving Show
 
 data PdReceiver  =  PdToOutlet
@@ -140,10 +140,10 @@ of the Pd logger window; and future events scheduled by the interpreter.
 \begin{code}
 
 data PdState =  PdState {
-                   sTs     :: Int,
-                   sNss    :: (Seq PdNodeState),
-                   sLog    :: [String],
-                   sSched  :: [PdEvent]
+                   sTs       :: Int,
+                   sNStates  :: (Seq PdNodeState),
+                   sLog      :: [String],
+                   sSched    :: [PdEvent]
                 }
    deriving Show
 
@@ -298,11 +298,11 @@ either directly or indirectly.
 
 \begin{code}
 
-fire p (PdMessageBox cmds) atoms (nidx, inl) s =
+fire p (PdMsgBox cmds) atoms (nidx, inl) s =
    let
-      (PdNodeState ins mem) = index (sNss s) nidx
+      (PdNodeState ins mem) = index (sNStates s) nidx
       ns' = PdNodeState (update inl atoms ins) mem
-      s' = s { sNss = (update nidx ns' (sNss s)) }
+      s' = s { sNStates = (update nidx ns' (sNStates s)) }
    in
       foldl' (runCommand p nidx) s' cmds
 
@@ -322,12 +322,12 @@ from right to left, as mandated by the Pure Data specification.
 
 fire p node atoms (nidx, inl) s =
    let
-      ns = index (sNss s) nidx
+      ns = index (sNStates s) nidx
       (ns', logw', outlets, evs) = sendMsg node atoms inl ns
       s' = s {
-         sNss    = update nidx ns' (sNss s),
-         sLog    = (sLog s)    ++ logw',
-         sSched  = (sSched s)  ++ (map (\e -> e { eNidx = nidx }) evs)
+         sNStates  = update nidx ns' (sNStates s),
+         sLog      = (sLog s)    ++ logw',
+         sSched    = (sSched s)  ++ (map (\e -> e { eNidx = nidx }) evs)
       }
 
       propagate :: PdState -> ([PdAtom], Int) -> PdState
@@ -376,7 +376,7 @@ given name.
 
 \begin{code}
 
-runCommand :: PdPatch -> Int -> PdState -> PdCommand -> PdState
+runCommand :: PdPatch -> Int -> PdState -> PdCmd -> PdState
 runCommand p nidx (PdState ts nss logw evs) cmd =
    let
       (PdNodeState ins mem) = index nss nidx
@@ -407,8 +407,8 @@ with a number get the prefix \texttt{list}.
 
 ffor a f = fmap f a
 
-dollarExpansion :: PdCommand -> [PdAtom] -> (PdReceiver, [PdAtom])
-dollarExpansion (PdCommand recv tokens) inlData =
+dollarExpansion :: PdCmd -> [PdAtom] -> (PdReceiver, [PdAtom])
+dollarExpansion (PdCmd recv tokens) inlData =
    (recv', atoms')
    where
       inlAt n = if n < length inlData then inlData !! n else PdFloat 0
@@ -470,9 +470,9 @@ buffer is propagated to the inlets of the nodes to which they are connected.
 
 runDspTree :: PdPatch -> PdState -> PdState
 runDspTree p s =
-   s { sNss = nss' }
+   s { sNStates = nss' }
    where
-      nss' = foldl' handle (zeroDspInlets (sNss s) (pDspSort p)) (pDspSort p)
+      nss' = foldl' handle (zeroDspInlets (sNStates s) (pDspSort p)) (pDspSort p)
 
       handle :: (Seq PdNodeState) -> Int -> (Seq PdNodeState)
       handle nss nidx =
@@ -922,7 +922,9 @@ performDsp obj ns =
 
 To wrap up the presentation of the interpreter modeling Pure Data, we present
 a demonstration of its use. We build a simple synthesizer with both frequency
-and amplitude controllable via events, and use it to play a simple tune.
+and amplitude controllable via events, and use it to play the motif from the
+main theme of the film ``Back To The Future'', composed by Alan Silvestri.
+
 First, we define a few constants corresponding to the frequency in Hertz of
 some musical notes:
 
@@ -944,41 +946,38 @@ Then, we construct the patch that corresponds to the following graph:
 
 \begin{code}
 
-example =
-   PdPatch (
-      fromList [
-         PdAtomBox  (PdFloat 0), -- 0
-         PdObj      [PdSymbol "osc~", PdFloat gSharp] 2 1, -- 1
-         PdMsgBox   [PdCommand PdToOutlet (map (PdTAtom . PdFloat) [0.5, 1000])], -- 2
-         PdMsgBox   [PdCommand PdToOutlet (map (PdTAtom . PdFloat) [0, 100])], -- 3
-         PdObj      [PdSymbol "line~"] 2 1, -- 4
-         PdObj      [PdSymbol "*~"] 2 1, -- 5
-         PdObj      [PdSymbol "dac~"] 1 0, -- 6
+example = PdPatch (fromList [
+   PdAtomBox  (PdFloat 0), -- 0
+   PdObj      [PdSymbol "osc~", PdFloat gSharp] 2 1, -- 1
+   PdMsgBox   [PdCmd PdToOutlet (map (PdTAtom . PdFloat) [0.5, 1000])], -- 2
+   PdMsgBox   [PdCmd PdToOutlet (map (PdTAtom . PdFloat) [0, 100])], -- 3
+   PdObj      [PdSymbol "line~"] 2 1, -- 4
+   PdObj      [PdSymbol "*~"] 2 1, -- 5
+   PdObj      [PdSymbol "dac~"] 1 0, -- 6
 
-         PdObj      [PdSymbol "receive", PdSymbol "MyMetro"] 0 1, -- 7
-         PdObj      [PdSymbol "metro", PdFloat 500] 2 1, -- 8
-         PdObj      [PdSymbol "delay", PdFloat 5] 2 1, -- 9
-         PdObj      [PdSymbol "list", PdFloat 0.5, PdFloat 0.1] 2 1, -- 10
-         PdObj      [PdSymbol "list", PdFloat 0, PdFloat 500] 2 1, -- 11
-         PdObj      [PdSymbol "line~"] 1 1, -- 12
-         PdObj      [PdSymbol "osc~", PdFloat (gSharp / 2)] 1 1, -- 13
-         PdObj      [PdSymbol "*~"] 2 1, -- 14
+   PdObj      [PdSymbol "receive", PdSymbol "MyMetro"] 0 1, -- 7
+   PdObj      [PdSymbol "metro", PdFloat 500] 2 1, -- 8
+   PdObj      [PdSymbol "delay", PdFloat 5] 2 1, -- 9
+   PdObj      [PdSymbol "list", PdFloat 0.5, PdFloat 0.1] 2 1, -- 10
+   PdObj      [PdSymbol "list", PdFloat 0, PdFloat 500] 2 1, -- 11
+   PdObj      [PdSymbol "line~"] 1 1, -- 12
+   PdObj      [PdSymbol "osc~", PdFloat (gSharp / 2)] 1 1, -- 13
+   PdObj      [PdSymbol "*~"] 2 1, -- 14
 
-         PdMsgBox   [PdCommand PdToOutlet
-                          [PdTAtom (PdSymbol "list"), PdTAtom (PdSymbol "bang")]], -- 15
-         PdMsgBox   [PdCommand PdToOutlet
-                          [PdTAtom (PdSymbol "list"), PdTAtom (PdSymbol "stop")]], -- 16
-         PdMsgBox   [PdCommand (PdReceiver "MyMetro") [PdTDollar 1]]] -- 17
-         
-      ) (fromList [
-         PdConnection (0,   0) (1,   0),  PdConnection (1,   0) (5,   0),  PdConnection (2,   0) (4,   0),
-         PdConnection (3,   0) (4,   0),  PdConnection (4,   0) (5,   1),  PdConnection (5,   0) (6,   0),
-         PdConnection (7,   0) (8,   0),  PdConnection (8,   0) (9,   0),  PdConnection (8,   0) (10,  0),
-         PdConnection (9,   0) (11,  0),  PdConnection (10,  0) (12,  0),  PdConnection (11,  0) (12,  0),
-         PdConnection (12,  0) (14,  0),  PdConnection (13,  0) (14,  1),  PdConnection (14,  0) (6,   0),
-         PdConnection (15,  0) (17,  0),  PdConnection (16,  0) (17,  0)]
-
-         ) [1, 4, 5, 12, 13, 14, 6]
+   PdMsgBox   [PdCmd PdToOutlet
+                    [PdTAtom (PdSymbol "list"), PdTAtom (PdSymbol "bang")]], -- 15
+   PdMsgBox   [PdCmd PdToOutlet
+                    [PdTAtom (PdSymbol "list"), PdTAtom (PdSymbol "stop")]], -- 16
+   PdMsgBox   [PdCmd (PdReceiver "MyMetro") [PdTDollar 1]]] -- 17
+   
+   ) (fromList [
+      PdConnection (0,   0) (1,   0),  PdConnection (1,   0) (5,   0),  PdConnection (2,   0) (4,   0),
+      PdConnection (3,   0) (4,   0),  PdConnection (4,   0) (5,   1),  PdConnection (5,   0) (6,   0),
+      PdConnection (7,   0) (8,   0),  PdConnection (8,   0) (9,   0),  PdConnection (8,   0) (10,  0),
+      PdConnection (9,   0) (11,  0),  PdConnection (10,  0) (12,  0),  PdConnection (11,  0) (12,  0),
+      PdConnection (12,  0) (14,  0),  PdConnection (13,  0) (14,  1),  PdConnection (14,  0) (6,   0),
+      PdConnection (15,  0) (17,  0),  PdConnection (16,  0) (17,  0)]
+   ) [1, 4, 5, 12, 13, 14, 6]
 
 \end{code}
 
