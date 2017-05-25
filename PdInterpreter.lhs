@@ -11,8 +11,8 @@
 %format val1 = "val_1"
 %format inlet0 = "inlet_0"
 %format inlet1 = "inlet_1"
-%format currEvents = "events_{curr}"
-%format nextEvents = "events_{next}"
+%format currEvents = "evs_{curr}"
+%format nextEvents = "evs_{next}"
 %format oldAtoms = "atoms_{old}"
 %format newAtoms = "atoms_{new}"
 %format (PdConnection a b) = "(" a "\rhd " b ")"
@@ -392,7 +392,7 @@ runCommand p nidx (PdState ts nss logw evs) cmd =
       PdReceiver r ->
          forEachReceiver p r atoms s'
       PdReceiverErr ->
-         printOut [PdSymbol "$1: symbol needed as message destination"] s'
+         printOut [PdSymbol "$1: symbol needed as msg destination"] s'
 
 \end{code}
 
@@ -472,7 +472,8 @@ runDspTree :: PdPatch -> PdState -> PdState
 runDspTree p s =
    s { sNStates = nss' }
    where
-      nss' = foldl' handle (zeroDspInlets (sNStates s) (pDspSort p)) (pDspSort p)
+      dspSort = pDspSort p
+      nss' = foldl' handle (zeroDspInlets (sNStates s) dspSort) dspSort
 
       handle :: (Seq PdNodeState) -> Int -> (Seq PdNodeState)
       handle nss nidx =
@@ -482,7 +483,8 @@ runDspTree p s =
             ns@(PdNodeState ins mem) = index nss nidx
             (outputs, mem') = performDsp obj ns
             nss'' = update nidx (PdNodeState ins mem') nss
-            propagate :: [[PdAtom]] -> (Seq PdNodeState) -> PdConnection -> (Seq PdNodeState)
+            propagate ::  [[PdAtom]] -> (Seq PdNodeState) -> PdConnection
+                          -> (Seq PdNodeState)
             propagate outputs nss (PdConnection (src, outl) (dst, inl))
                | src == nidx  = addToInlet (dst, inl) (outputs !! outl) nss
                | otherwise    = nss
@@ -524,7 +526,8 @@ values are internally floats between -1.0 and 1.0).
 
 \begin{code}
 
-addToInlet :: (Int, Int) -> [PdAtom] -> (Seq PdNodeState) -> (Seq PdNodeState)
+addToInlet ::  (Int, Int) -> [PdAtom] -> (Seq PdNodeState)
+               -> (Seq PdNodeState)
 addToInlet (dst, inl) atoms nss = update dst ns' nss
    where
       saturate (PdFloat f) = PdFloat (max (-1.0) (min 1.0 f))
@@ -562,6 +565,7 @@ initialState (PdPatch nodes _ _) = PdState 0 (fmap emptyNode nodes) [] []
 \end{code}
 
 \section{Operations}
+\label{msgs}
 
 The graphical language of Pure Data is graph-based and contains only nodes and
 edges. The contents of nodes (object boxes, message boxes and atom boxes) are
@@ -635,7 +639,7 @@ sendMsg (PdAtomBox _) [PdSymbol "bang"] 0 ns@(PdNodeState _ mem) =
 
 \end{code}
 
-\subsection{An object with side-effects: \texttt{print}}
+\subsection{An object with side-effects: \texttt{print}\label{pdinterpreterprint}}
 
 The \texttt{print} object accepts data through its inlet and prints it to
 the log console. It demonstrates the use of the log console as a global
@@ -655,6 +659,7 @@ sendMsg (PdObj (PdSymbol "print" : xs) _ _) atoms 0 ns =
 \end{code}
 
 \subsection{An object with hot and cold inlets: \texttt{+}}
+\label{pdinterpreterplus}
 
 In Pure Data, the first inlet of a node is the ``hot'' inlet; when data is
 received through it, the action of the node is performed. When data arrives in
@@ -694,6 +699,7 @@ sendMsg  (PdObj [PdSymbol "+", n] _ _) [PdSymbol "bang"] 0
 \end{code}
 
 \subsection{Objects producing timed events: @delay@ and @metro@}
+\label{pdinterpreterdelaymetro}
 
 The \texttt{delay} object demonstrates how objects generate future events.
 We handle four cases: receiving a \texttt{bang} message schedules a
@@ -702,7 +708,8 @@ node's outlets.
 
 \begin{code}
 
-sendMsg (PdObj [PdSymbol "delay", PdFloat time] inl _) [PdSymbol "bang"] 0 ns =
+sendMsg (PdObj  [PdSymbol "delay", PdFloat time] inl _)
+                [PdSymbol "bang"] 0 ns =
    (ns, [], [], [PdEvent (floor time) 0 [PdSymbol "tick"]])
 
 sendMsg (PdObj (PdSymbol "delay" : t) inl _) [PdSymbol "tick"] 0 ns =
@@ -728,7 +735,8 @@ sendMsg  (PdObj (PdSymbol "metro" : xs) inl _) [PdSymbol "bang"] 0
       (PdFloat time) = head (inlet1 ++ mem ++ xs ++ [PdFloat 1000])
       ns' = PdNodeState (emptyInlets inl) [PdFloat time, PdSymbol "on"]
    in
-      (ns', [], [[PdSymbol "bang"]], [PdEvent (floor time) 0 [PdSymbol "tick"]])
+      (ns', [],  [[PdSymbol "bang"]],
+                 [PdEvent (floor time) 0 [PdSymbol "tick"]])
 
 sendMsg  (PdObj (PdSymbol "metro" : xs) inl _) [PdSymbol "stop"] 0 
              (PdNodeState ins [PdFloat time, PdSymbol "on"]) =
@@ -755,7 +763,8 @@ type in function |performDsp|, in Section~\ref{oscdsp}.
 
 \begin{code}
 
-sendMsg  (PdObj (PdSymbol "osc~" : _) _ _) [PdSymbol "float", PdFloat freq] 0 
+sendMsg  (PdObj (PdSymbol "osc~" : _) _ _)
+             [PdSymbol "float", PdFloat freq] 0 
              (PdNodeState ins [_, position]) =
    (PdNodeState ins [PdFloat ((2 * pi) / (32000 / freq)), position], [], [], [])
 
@@ -776,7 +785,9 @@ sendMsg  (PdObj [PdSymbol "line~"] _ _)
       [PdFloat current, PdFloat target, PdFloat delta] =
          if mem /= [] then mem else [PdFloat 0, PdFloat 0, PdFloat 0]
       mem' =
-         [PdFloat current, PdFloat amp, PdFloat ((amp - current) / (time * 32))]
+         [  PdFloat current,
+            PdFloat amp,
+            PdFloat ((amp - current) / (time * 32)) ]
    in
       (PdNodeState ins mem', [], [], [])
 
@@ -849,8 +860,12 @@ through the node's outlet.
 
 \begin{code}
 
-performDsp obj@(PdObj [PdSymbol "osc~", PdFloat freq] _ _) (PdNodeState ins []) =
-   performDsp obj (PdNodeState ins [PdFloat ((2 * pi) / (32000 / freq)), PdFloat 0])
+performDsp  obj@(PdObj [PdSymbol "osc~", PdFloat freq] _ _)
+            (PdNodeState ins []) =
+   let
+      values = [PdFloat ((2 * pi) / (32000 / freq)), PdFloat 0]
+   in
+      performDsp obj (PdNodeState ins values)
 
 performDsp  (PdObj [PdSymbol "osc~", _] _ _)
             (PdNodeState ins [PdFloat delta, PdFloat position]) =
