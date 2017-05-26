@@ -180,8 +180,8 @@ data PdEvent =  PdEvent {
 
 The execution mode of Pure Data is data-driven. The user triggers events via
 its interface, and those events cause a cascading series of firings. The user
-may trigger events by clicking nodes, entering numbers (or using MIDI devices,
-which are equivalent to entering numbers).
+may trigger events by clicking nodes or entering numbers (possibly using
+MIDI devices, which are functionally equivalent to entering numbers).
 
 \subsection{Main loop}
 
@@ -292,7 +292,7 @@ fire :: PdPatch -> PdNode -> [PdAtom] -> (Int, Int) -> PdState -> PdState
 
 Depending on the type of node, we perform different actions. For message
 boxes, we feed the incoming atoms into the inlet, and then we fold over its
-triggering its commands, like when they are clicked by the user. As we will
+commands triggering them, like when they are clicked by the user. As we will
 see below in the definition of |runCommand|, this may fire further nodes
 either directly or indirectly.
 
@@ -399,7 +399,7 @@ runCommand p nidx (PdState ts nss logw evs) cmd =
 The process of $\$$-expansion is a simple substitution, where the receiver
 must be a string. Invalid indices are converted to zero. (In Pure Data, they
 also produce an error message to the log window, but here we omit this for
-brevity.) We also handle here a few syntactic shortcuts: a messages with a
+brevity.) We also handle here a few syntactic shortcuts: a message with a
 sole number like \texttt{1.0} expands to \texttt{float 1.0}; lists starting
 with a number get the prefix \texttt{list}.
 
@@ -464,7 +464,7 @@ it is given as an input (in the |dspSort| field of |p|).
 
 As the list of nodes is traversed, each object is triggered (applying the
 |performDsp| function) and then the new computed value of its audio
-buffer is propagated to the inlets of the nodes to which they are connected. 
+buffer is propagated to the inlets of the nodes to which it is connected. 
 
 \begin{code}
 
@@ -599,7 +599,7 @@ sendMsg ::  PdNode -> [PdAtom] -> Int -> PdNodeState
 \end{code}
 
 Unlike the |runCommand| function used in the firing of message boxes,
-which causes global effects to the graph evaluation (via indirect connections)
+which causes global effects on the graph evaluation (via indirect connections)
 and therefore needs access to the whole state, |sendMsg| accesses
 only the node's private state, producing a triple containing the new private
 node state, any text produced for the output log, a list of messages to
@@ -717,7 +717,7 @@ sendMsg (PdObj (PdSymbol "delay" : t) inl _) [PdSymbol "tick"] 0 ns =
 
 \end{code}
 
-The \texttt{metro} node, on its turn, expands on the \texttt{delay}
+The \texttt{metro} node, in its turn, expands on the \texttt{delay}
 functionality, implementing a metronome: it sends a series of \texttt{bang}
 messages at regular time intervals. It also has a second inlet which allows
 updating the interval.
@@ -964,8 +964,8 @@ Then, we construct the patch that corresponds to the following graph:
 example = PdPatch (fromList [
    PdAtomBox  (PdFloat 0), -- 0
    PdObj      [PdSymbol "osc~", PdFloat gSharp] 2 1, -- 1
-   PdMsgBox   [PdCmd PdToOutlet (map (PdTAtom . PdFloat) [0.5, 1000])], -- 2
-   PdMsgBox   [PdCmd PdToOutlet (map (PdTAtom . PdFloat) [0, 100])], -- 3
+   PdMsgBox   [PdCmd PdToOutlet (floatList [0.5, 1000])], -- 2
+   PdMsgBox   [PdCmd PdToOutlet (floatList [0, 100])], -- 3
    PdObj      [PdSymbol "line~"] 2 1, -- 4
    PdObj      [PdSymbol "*~"] 2 1, -- 5
    PdObj      [PdSymbol "dac~"] 1 0, -- 6
@@ -980,9 +980,9 @@ example = PdPatch (fromList [
    PdObj      [PdSymbol "*~"] 2 1, -- 14
 
    PdMsgBox   [PdCmd PdToOutlet
-                    [PdTAtom (PdSymbol "list"), PdTAtom (PdSymbol "bang")]], -- 15
+     [PdTAtom (PdSymbol "list"), PdTAtom (PdSymbol "bang")]], -- 15
    PdMsgBox   [PdCmd PdToOutlet
-                    [PdTAtom (PdSymbol "list"), PdTAtom (PdSymbol "stop")]], -- 16
+     [PdTAtom (PdSymbol "list"), PdTAtom (PdSymbol "stop")]], -- 16
    PdMsgBox   [PdCmd (PdReceiver "MyMetro") [PdTDollar 1]]] -- 17
    
    ) (fromList [
@@ -993,6 +993,8 @@ example = PdPatch (fromList [
       PdConnection (12,  0) (14,  0),  PdConnection (13,  0) (14,  1),  PdConnection (14,  0) (6,   0),
       PdConnection (15,  0) (17,  0),  PdConnection (16,  0) (17,  0)]
    ) [1, 4, 5, 12, 13, 14, 6]
+   where
+      floatList = map (PdTAtom . PdFloat)
 
 \end{code}
 
@@ -1042,9 +1044,9 @@ main =
 \end{code}
 
 In Pure Data, the sound card is represented by the \texttt{dac\~} object. Our
-interpreter does nat handle actual audio output natively, but we can extract
+interpreter does not handle actual audio output natively, but we can extract
 the inlet data from that node from the list of states, and convert it to an
-audio \texttt{wav} file format, that is then sent to standard output.
+audio \texttt{wav} file format, which is then sent to standard output.
 
 \begin{code}
 
